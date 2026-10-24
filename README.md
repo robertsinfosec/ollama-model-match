@@ -1,6 +1,7 @@
 # ollama-model-match
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/robertsinfosec/ollama-model-match/badge)](https://scorecard.dev/viewer/?uri=github.com%2Frobertsinfosec%2Follama-model-match)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15862/badge)](https://www.bestpractices.dev/projects/15862)
 [![ShellCheck](https://img.shields.io/github/actions/workflow/status/robertsinfosec/ollama-model-match/shellcheck.yml?label=shellcheck)](https://github.com/robertsinfosec/ollama-model-match/actions/workflows/shellcheck.yml)
 [![License](https://img.shields.io/github/license/robertsinfosec/ollama-model-match)](https://github.com/robertsinfosec/ollama-model-match/blob/main/LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/robertsinfosec/ollama-model-match)](https://github.com/robertsinfosec/ollama-model-match/releases)
@@ -120,4 +121,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-Unlicense — public domain. Do whatever you want with it. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
