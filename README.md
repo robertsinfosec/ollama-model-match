@@ -1,5 +1,11 @@
 # ollama-model-match
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/robertsinfosec/ollama-model-match/badge)](https://scorecard.dev/viewer/?uri=github.com%2Frobertsinfosec%2Follama-model-match)
+[![ShellCheck](https://img.shields.io/github/actions/workflow/status/robertsinfosec/ollama-model-match/shellcheck.yml?label=shellcheck)](https://github.com/robertsinfosec/ollama-model-match/actions/workflows/shellcheck.yml)
+[![License](https://img.shields.io/github/license/robertsinfosec/ollama-model-match)](https://github.com/robertsinfosec/ollama-model-match/blob/main/LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/robertsinfosec/ollama-model-match)](https://github.com/robertsinfosec/ollama-model-match/releases)
+[![GitHub Stars](https://img.shields.io/github/stars/robertsinfosec/ollama-model-match)](https://github.com/robertsinfosec/ollama-model-match/stargazers)
+
 **Find the best Ollama models for your hardware.** An agentic pipeline that discovers, filters, benchmarks, and evaluates local LLMs — automatically.
 
 ## The Problem
