@@ -72,13 +72,13 @@ ollama ls >/dev/null || die "Cannot connect to Ollama."
 
 # --- Read a model's config from specs.yaml ---
 get_model_config() {
-    local alias="$1"
+    local model_alias="$1"
     local count i=0
     count=$(yq -r '.models | length' "$SPEC_FILE" 2>/dev/null || echo "0")
     while (( i < count )); do
         local found
         found=$(yq -r ".models[$i].alias" "$SPEC_FILE")
-        if [[ "$found" == "$ALIAS" ]]; then
+        if [[ "$found" == "$model_alias" ]]; then
             yq -r ".models[$i].tag" "$SPEC_FILE"
             yq -r ".models[$i].context // 8192" "$SPEC_FILE"
             yq -r ".models[$i].thinking // false" "$SPEC_FILE"
