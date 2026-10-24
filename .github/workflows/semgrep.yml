@@ -31,10 +31,6 @@ jobs:
         run: semgrep scan --config auto --sarif --output results.sarif src/ || true
 
       - name: Upload SARIF
-<<<<<<< HEAD
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
-=======
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
->>>>>>> dfff001 (Sprucing things up for the scorecard.)
         with:
           sarif_file: results.sarif
