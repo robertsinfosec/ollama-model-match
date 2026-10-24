@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    branches: ['**']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate version
+        id: version
+        run: |
+          # Date components: month and hour have NO leading zero
+          # Day and minute ALWAYS have leading zero
+          YY=$(date -u +%y)
+          M=$(date -u +%-m)
+          DD=$(date -u +%d)
+          H=$(date -u +%-H)
+          MM=$(date -u +%M)
+          VERSION="v${YY}.${M}${DD}.${H}${MM}"
+
+          BRANCH="${GITHUB_REF_NAME}"
+          SHORT_SHA=$(git rev-parse --short HEAD)
+
+          if [[ "$BRANCH" != "main" ]]; then
+            # Sanitize branch name for tag (replace / with -)
+            SAFE_BRANCH=$(echo "$BRANCH" | tr '/' '-')
+            VERSION="${VERSION}-${SAFE_BRANCH}+${SHORT_SHA}"
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION"
+
+      - name: Create archive
+        run: |
+          cd src
+          zip -r "../ollama-model-match-${{ steps.version.outputs.version }}.zip" . -x "results/*" "specs.yaml" "*.bak"
+          cd ..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          files: ollama-model-match-${{ steps.version.outputs.version }}.zip
+          body: |
+            ## ollama-model-match ${{ steps.version.outputs.version }}
+
+            ### Contents
+            - `00-prereqs.sh` through `08-update.sh` (pipeline scripts)
+            - `README.md` (full instruction manual)
+            - `.opencode/skills/`, `.claude/skills/`, `.github/skills/` (skill definitions)
+
+            ### Usage
+            1. Download and extract the zip
+            2. Open OpenCode (or Claude Code, or VS Code with Copilot) in the extracted folder
+            3. Say: "Read README.md and follow all instructions"
+
+            ### Notes
+            - `specs.yaml` and `results/` are generated at runtime (not included)
+            - Requires: `yq`, `jq`, `curl`, `ollama` installed on the target machine
