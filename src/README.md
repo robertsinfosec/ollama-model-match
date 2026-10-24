@@ -128,13 +128,21 @@ bash 02-discover.sh
 ```
 
 Polls Ollama library, HuggingFace orgs (DeepSeek, Qwen, THUDM, MiniMax, Mistral), and recent GGUF uploads.
-Filters out vision/embedding/audio models and anything 7B+.
+Filters out vision/embedding/audio models and anything too large for the VRAM budget.
+**Hardware-aware:** Size tiers scale with VRAM budget:
+- 4GB VRAM → searches 2B-4B models
+- 12GB VRAM → searches 3B-8B models
+- 32GB VRAM → searches 7B-32B models
+- 128GB VRAM → searches 32B-70B+ models
+Always includes small models (1B-3B) for the "fast" role.
 Scores each candidate with `priority` (high/medium/low).
 Deduplicates against `models:`, `rejected:`, and existing `candidates:`.
 
 **Output:** `specs.yaml` updated with new candidates.
 
 **LLM Action:** Review candidate list. Remove any clearly irrelevant entries.
+On large machines (32GB+ VRAM), prefer LARGER models for 'frontier' and 'default' roles.
+Small models (1B-3B) should only be used for the 'fast' role.
 
 ---
 
@@ -258,6 +266,7 @@ Review all benchmark and evaluation results. For each qualifying model:
    - Set `status: active`
    - Record `measured_tok_per_sec` and `tested_date`
    - Add notes about strengths/weaknesses
+   - Assign roles (see Role Assignment Guidelines below)
 
 2. **If score < 12/15 OR tok/s < min_tok_per_sec:**
    - Move to `rejected:` section in `specs.yaml`
@@ -270,14 +279,59 @@ Review all benchmark and evaluation results. For each qualifying model:
    bash 07-report.sh | glow
    ```
 
-**Output:** Updated `specs.yaml` with promoted/rejected models. Clean candidate list.
+5. **Create friendly aliases:**
+   ```bash
+   bash 08-alias.sh
+   ```
+
+**Output:** Updated `specs.yaml` with promoted/rejected models. Friendly aliases created. Clean candidate list.
+
+**Role Assignment Guidelines:**
+- `default`: Highest coding_score among qualifying models
+- `fast`: Highest tok/s (usually smallest model)
+- `code`: Highest coding_score among coding-focused models (or default if none)
+- `frontier`: Highest coding_score overall (may be slower than default)
+- `thinking`: Best reasoning model (if available)
+- `cyber`: Cybersecurity-focused model (if available)
+- `uncensored`: Uncensored model (if available)
+- On small machines (4GB), many roles collapse to the same model — that's OK
+- On large machines (32GB+), prefer LARGER models for frontier/default
+- Only create friendly aliases for roles that are meaningfully distinct
+- Remove old aliases that are no longer relevant
+- Assign `null` to roles that can't be filled
+
+**Roles in specs.yaml:**
+```yaml
+roles:
+  default: phi4-mini       # model alias
+  fast: tinyllama
+  code: phi4-mini          # same as default on 4GB
+  thinking: null           # no thinking model qualified
+  frontier: null           # same as default on 4GB
+  cyber: null              # no cyber model qualified
+  uncensored: null         # no uncensored model qualified
+```
 
 ---
+
+### Utility: Create Role Aliases
+
+**Type:** Deterministic (bash)
+**Script:** `08-alias.sh`
+
+```bash
+bash 08-alias.sh              # Create all role aliases
+bash 08-alias.sh <role>       # Create just one (e.g., default)
+```
+
+Reads `roles:` from `specs.yaml` and creates friendly aliases.
+Each alias gets `num_ctx` and thinking config from the model's entry.
+Skips roles set to `null`.
 
 ### Utility: Update Single Model
 
 **Type:** Deterministic (bash)
-**Script:** `08-update.sh`
+**Script:** `09-update.sh`
 
 ```bash
 bash 08-update.sh <alias>
