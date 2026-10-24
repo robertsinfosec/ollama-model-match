@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # It checks for required tools and finds Ollama (native/Docker).
 # Outputs: status to stdout/stderr. Exit 0 = OK, exit 1 = critical failure.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# SCRIPT_DIR not needed — prereqs doesn't read specs.yaml
 
 # --- Colors ---
 if [[ -t 1 ]]; then

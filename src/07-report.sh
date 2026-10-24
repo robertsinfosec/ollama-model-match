@@ -38,7 +38,7 @@ echo ""
 echo "| Alias | Priority | Est. VRAM | Bench tok/s | Eval Score |"
 echo "|-------|----------|-----------|-------------|------------|"
 
-while IFS='|' read -r tag priority source total_vram vram_est; do
+while IFS='|' read -r tag priority total_vram _source _vram_est; do
     safe_name=$(echo "$tag" | tr '/' '_')
     bench_file="${BENCH_DIR}/${safe_name}.txt"
     eval_dir="${EVAL_DIR}/${safe_name}"

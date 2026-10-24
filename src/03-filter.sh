@@ -82,9 +82,10 @@ if [[ "$candidate_count" == "0" || "$candidate_count" == "null" ]]; then
 fi
 
 # --- Filter ---
-> "$QUALIFYING"
 qualifying_count=0
 excluded_count=0
+
+: > "$QUALIFYING"
 
 i=0
 while (( i < candidate_count )); do
