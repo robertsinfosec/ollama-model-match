@@ -31,6 +31,16 @@ Thank you for your interest in contributing! This project aims to make local LLM
 
 See [STYLE_GUIDE.md](STYLE_GUIDE.md) for bash scripting conventions.
 
+### Testing Policy
+
+All new functionality must be accompanied by tests. The test policy is:
+
+1. **New scripts** must pass `bash -n` and ShellCheck with zero warnings
+2. **New scripts** must be tested on at least one machine before submission
+3. **Modified scripts** must not break existing functionality
+4. **New scripts** must produce clear, color-coded output (`[*]`, `[+]`, `[!]`, `[-]`)
+5. **All PRs** must pass the ShellCheck CI workflow
+
 ### Testing
 
 Before submitting a PR:
