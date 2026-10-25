@@ -14,7 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install yq
-        run: go install github.com/mikefarah/yq/v4@v4.44.3
+      - name: Install Python yq
+        run: |
+          python3 -m venv "$RUNNER_TEMP/yq-venv"
+          "$RUNNER_TEMP/yq-venv/bin/pip" install yq==3.4.3
+          echo "$RUNNER_TEMP/yq-venv/bin" >> "$GITHUB_PATH"
       - name: Run behavioral tests
-        run: PATH="$(go env GOPATH)/bin:$PATH" bash tests/run.sh
+        run: bash tests/run.sh

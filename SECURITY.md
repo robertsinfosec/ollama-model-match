@@ -28,7 +28,7 @@ This project:
 
 ## Dependencies
 
-- `yq` (v3.x) — YAML parsing
+- Python `yq` (kislyuk/yq, v3.x) — YAML parsing (not Mike Farah's Go `yq`)
 - `jq` — JSON parsing
 - `curl` — HTTP requests
 - `ollama` — Model management
