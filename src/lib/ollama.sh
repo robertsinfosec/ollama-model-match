@@ -38,12 +38,19 @@ ollama() {
     fi
 }
 
-ollama_with_timeout() {
-    local duration="$1"
-    shift
-    if [[ "$OLLAMA_BACKEND" == "docker" ]]; then
-        timeout "$duration" docker exec "$OLLAMA_CONTAINER" ollama "$@"
-    else
-        timeout "$duration" ollama "$@"
-    fi
+# Ollama displays untagged references with :latest. Normalize before comparing
+# inventories so cleanup never mistakes a pre-existing model for a new one.
+ollama_model_name() {
+    local name="$1"
+    [[ "${name##*/}" == *:* ]] || name="${name}:latest"
+    printf '%s\n' "$name"
+}
+
+ollama_model_names() {
+    local listing name
+    listing=$(ollama ls) || return "$?"
+    while read -r name; do
+        [[ -n "$name" ]] || continue
+        ollama_model_name "$name"
+    done < <(printf '%s\n' "$listing" | awk 'NR > 1 {print $1}')
 }

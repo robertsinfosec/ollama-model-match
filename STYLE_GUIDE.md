@@ -47,7 +47,7 @@ die() { log_err "$*"; exit 1; }
 - Use `yq -r` for YAML reads (raw output, no quotes)
 - Use `yq -iy` for in-place YAML edits
 - Use `awk` for floating-point comparisons
-- Use `timeout` for external commands that may hang
+- Do not impose execution deadlines on downloads or inference; allow explicit cancellation
 - Always check if required files exist before proceeding
 - Always detect Ollama backend (Docker or native) before calling ollama
 - Use `mapfile` for reading file lines into arrays

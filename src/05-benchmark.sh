@@ -8,12 +8,11 @@ set -Eeuo pipefail
 # Reads: results/qualifying.txt
 # Outputs: results/bench/<alias>.txt (output + tok/s metrics)
 #
-# Internal timeout: 280s per model (under 300s tool timeout).
-# Warmup timeout: 60s.
+# Warmup and inference run until completion or explicit cancellation.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
-RESULTS_DIR="${SCRIPT_DIR}/results"
+RESULTS_DIR="${PIPELINE_RESULTS_DIR:-${SCRIPT_DIR}/results}"
 QUALIFYING="${RESULTS_DIR}/qualifying.txt"
 BENCH_DIR="${RESULTS_DIR}/bench"
 
@@ -63,7 +62,6 @@ else
 fi
 
 log_info "Prompt: $BENCH_PROMPT"
-log_info "Internal timeout: 280s per model"
 log_info ""
 
 # --- Benchmark each model ---
@@ -75,12 +73,12 @@ for line in "${models_to_bench[@]}"; do
 
     log_info "==> Benchmarking: $tag (priority: $priority)"
 
-    # Warmup (60s timeout)
+    # Warmup
     log_info "    Warming up..."
-    echo "hello" | ollama_with_timeout 60 run "$tag" >/dev/null 2>&1 || true
+    echo "hello" | ollama run "$tag" >/dev/null
 
-    # Benchmark (280s timeout)
-    log_info "    Running benchmark (timeout: 280s)..."
+    # Benchmark
+    log_info "    Running benchmark..."
     {
         echo "=== BENCHMARK: $tag ==="
         echo "Priority: $priority"
@@ -88,18 +86,13 @@ for line in "${models_to_bench[@]}"; do
         echo "Date: $(date -Iseconds)"
         echo ""
         echo "--- OUTPUT ---"
-        echo "$BENCH_PROMPT" | ollama_with_timeout 280 run "$tag" --verbose 2>&1
+        echo "$BENCH_PROMPT" | ollama run "$tag" --verbose 2>&1
         echo ""
         echo "--- END ---"
     } > "$outfile" 2>&1
 
-    # Check if timed out
-    if grep -q "Timed out" "$outfile" 2>/dev/null || [[ $? -eq 124 ]]; then
-        log_warn "    Timed out after 280s"
-    fi
-
     # Extract metrics
-    eval_rate=$(grep -oP 'eval rate:\s*\K[0-9.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
+    eval_rate=$(grep -oP '^eval rate:\s*\K[0-9.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
     prompt_rate=$(grep -oP 'prompt eval rate:\s*\K[0-9.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
     eval_count=$(grep -oP 'eval count:\s*\K[0-9]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
     total_dur=$(grep -oP 'total duration:\s*\K[0-9a-z.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
@@ -111,7 +104,7 @@ for line in "${models_to_bench[@]}"; do
             log_warn "    eval rate: ${eval_rate} tok/s (below 15 threshold) | prompt: ${prompt_rate} tok/s | tokens: ${eval_count}"
         fi
     else
-        log_err "    Could not parse metrics from output (model may have failed to load)"
+        die "Could not parse generation metrics from $outfile; review the output before continuing."
     fi
     log_info "    Output saved: $outfile"
     log_info ""

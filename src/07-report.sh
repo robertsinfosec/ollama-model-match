@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # Outputs: markdown report to stdout (pipe to glow for pretty output)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESULTS_DIR="${SCRIPT_DIR}/results"
+RESULTS_DIR="${PIPELINE_RESULTS_DIR:-${SCRIPT_DIR}/results}"
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
 QUALIFYING="${RESULTS_DIR}/qualifying.txt"
 BENCH_DIR="${RESULTS_DIR}/bench"
@@ -51,7 +51,7 @@ while IFS='|' read -r tag priority _source total_vram _vram_est; do
 
     tok_s="N/A"
     if [[ -f "$bench_file" ]]; then
-        extracted=$(grep -oP 'eval rate:\s*\K[0-9.]+' "$bench_file" 2>/dev/null | head -1 || true)
+        extracted=$(grep -oP '^eval rate:\s*\K[0-9.]+' "$bench_file" 2>/dev/null | head -1 || true)
         [[ -n "$extracted" ]] && tok_s="$extracted"
     fi
 

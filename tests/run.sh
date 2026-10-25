@@ -23,6 +23,91 @@ write_specs() {
     cat > "${path}/src/specs.yaml"
 }
 
+# Stateful fake with the real CLI's inventory shape and :latest normalization.
+# No tests contact a real Ollama server or download models.
+prepare_execution_workspace() {
+    local workspace="$1"
+    mkdir -p "${workspace}/bin" "${workspace}/ollama-state"
+    printf 'Weekly research: test-1b, default/code/fast.\n' > "${workspace}/src/results/research.md"
+    printf 'FROM user-owned\n' > "${workspace}/ollama-state/user-model:latest"
+    write_specs "$workspace" <<'YAML'
+hardware:
+  gpu_name: Test GPU
+  gpu_vendor: nvidia
+  gpu_vram_gb: 4
+thresholds:
+  vram_headroom_gb: 1
+models: []
+rejected: []
+candidates:
+  - tag: test-1b
+    source: test
+    priority: high
+    estimated_vram_gb: 1
+YAML
+    cat > "${workspace}/bin/ollama" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+state="${OLLAMA_STATE:?}"
+normalize() { [[ "$1" == *:* ]] && printf '%s\n' "$1" || printf '%s:latest\n' "$1"; }
+command="$1"
+shift
+case "$command" in
+    ls)
+        printf 'NAME ID SIZE MODIFIED\n'
+        find "$state" -maxdepth 1 -type f -printf '%f id size now\n'
+        ;;
+    pull) printf 'FROM upstream\n' > "${state}/$(normalize "$1")" ;;
+    stop) ;;
+    rm)
+        printf '%s\n' "$1" >> "${state}/../removals.log"
+        rm -f "${state}/$(normalize "$1")"
+        ;;
+    create)
+        [[ "${FAIL_ROLE:-}" != "$1" ]] || exit 8
+        destination=$(normalize "$1")
+        contents=$(cat)
+        source=$(awk '$1 == "FROM" {print $2; exit}' <<< "$contents")
+        [[ -f "${state}/$(normalize "$source")" ]] || exit 1
+        printf '%s\n' "$contents" > "${state}/${destination}"
+        ;;
+    show)
+        if [[ "$1" == '--modelfile' ]]; then
+            cat "${state}/$(normalize "$2")"
+        else
+            [[ -f "${state}/$(normalize "$1")" ]]
+        fi
+        ;;
+    run)
+        [[ "${FAIL_RUN:-false}" == false ]] || exit 9
+        cat >/dev/null
+        printf 'A complete response.\neval rate: 25.00 tokens/s\n'
+        ;;
+    *) exit 1 ;;
+esac
+SH
+    cat > "${workspace}/bin/docker" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+    cat > "${workspace}/bin/timeout" <<'SH'
+#!/usr/bin/env bash
+echo 'Unexpected execution deadline' >&2
+exit 99
+SH
+    chmod +x "${workspace}/bin/ollama" "${workspace}/bin/docker" "${workspace}/bin/timeout"
+}
+
+run_execution_workspace() {
+    local workspace="$1"
+    PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" bash "${workspace}/src/10-run-unattended.sh"
+}
+
+select_test_roles() {
+    local workspace="$1"
+    yq -iy '.models = [{alias: "test-1b", tag: "test-1b", num_ctx: 8192}] | .roles = {default: "test-1b", fast: "test-1b", code: "test-1b"}' "${workspace}/src/specs.yaml"
+}
+
 test_filter_honors_configured_headroom() {
     local workspace
     workspace=$(make_workspace "filter-headroom")
@@ -112,10 +197,10 @@ SH
     PATH="${fake_bin}:${PATH}" OLLAMA_TEST_LOG="$log" bash -c '
         source "$1/src/lib/ollama.sh"
         OLLAMA_BACKEND=native
-        ollama_with_timeout 5 run native-model
+        ollama run native-model
         OLLAMA_BACKEND=docker
         OLLAMA_CONTAINER=test-container
-        ollama_with_timeout 5 run docker-model
+        ollama run docker-model
     ' _ "$workspace"
     grep -qx 'native:run native-model' "$log" || fail "native Ollama routing failed"
     grep -qx 'docker:exec test-container ollama run docker-model' "$log" || fail "Docker Ollama routing failed"
@@ -125,9 +210,10 @@ SH
 test_unattended_runner_records_failure() {
     local workspace
     workspace=$(make_workspace "unattended-failure")
+    prepare_execution_workspace "$workspace"
     cat > "${workspace}/src/03-filter.sh" <<'SH'
 #!/usr/bin/env bash
-exit 0
+printf 'test-1b|high|test|1.0|0.6\n' > "${PIPELINE_RESULTS_DIR:?}/qualifying.txt"
 SH
     cat > "${workspace}/src/04-pull.sh" <<'SH'
 #!/usr/bin/env bash
@@ -135,7 +221,7 @@ exit 7
 SH
     chmod +x "${workspace}/src/03-filter.sh" "${workspace}/src/04-pull.sh"
 
-    if (cd "$workspace/src" && bash 10-run-unattended.sh >/dev/null 2>&1); then
+    if run_execution_workspace "$workspace" >/dev/null 2>&1; then
         fail "unattended runner continued after a failed stage"
     fi
     grep -qE 'FAILED \| 04 \| 04-pull.sh \| exit=7' "${workspace}/src/results/unattended-status.txt" || fail "unattended runner did not record the failure"
@@ -231,6 +317,116 @@ SH
     pass "failed pull removes candidate"
 }
 
+test_runner_requires_research_handoff() {
+    local workspace
+    workspace=$(make_workspace "missing-research")
+    if bash "${workspace}/src/10-run-unattended.sh" >/dev/null 2>&1; then
+        fail "runner accepted missing research handoff"
+    fi
+    [[ ! -f "${workspace}/src/results/latest-run.txt" ]] || fail "runner began without research"
+    pass "runner requires research handoff"
+}
+
+test_runner_produces_isolated_review_packet() {
+    local workspace run previous
+    workspace=$(make_workspace "review-packet")
+    prepare_execution_workspace "$workspace"
+    mkdir -p "${workspace}/src/results/bench"
+    printf 'stale\n' > "${workspace}/src/results/bench/old-model.txt"
+    run_execution_workspace "$workspace" >/dev/null
+    run=$(cat "${workspace}/src/results/latest-run.txt")
+    [[ -f "$run/execution-complete" && -f "$run/eval/test-1b/coding.txt" ]] || fail "missing completed review evidence"
+    [[ ! -f "$run/bench/old-model.txt" ]] || fail "stale benchmark entered review packet"
+    grep -q '^user-model:latest$' "$run/models-before.txt" || fail "initial inventory missing"
+    grep -q '^test-1b:latest$' "$run/managed-models.txt" || fail "managed artifact not recorded"
+    grep -q "$run" "${workspace}/src/results/review.md" || fail "handoff points at wrong run"
+    previous="$run"
+    run_execution_workspace "$workspace" >/dev/null
+    run=$(cat "${workspace}/src/results/latest-run.txt")
+    [[ "$run" != "$previous" && -f "$previous/execution-complete" ]] || fail "new run overwrote previous evidence"
+    pass "runner produces isolated review packets without execution deadlines"
+}
+
+test_runner_does_not_publish_failed_inference() {
+    local workspace run
+    workspace=$(make_workspace "inference-failure")
+    prepare_execution_workspace "$workspace"
+    if FAIL_RUN=true run_execution_workspace "$workspace" >/dev/null 2>&1; then
+        fail "runner accepted failed inference"
+    fi
+    run=$(cat "${workspace}/src/results/latest-run.txt")
+    [[ ! -f "$run/execution-complete" ]] || fail "failed inference marked complete"
+    grep -q 'FAILED | 05' "$run/status.txt" || fail "failed inference stage not recorded"
+    grep -q 'NOT READY' "${workspace}/src/results/review.md" || fail "failed inference published review"
+    pass "runner rejects failed inference before review"
+}
+
+test_cleanup_requires_verified_aliases_and_preserves_existing_models() {
+    local workspace run
+    workspace=$(make_workspace "cleanup")
+    prepare_execution_workspace "$workspace"
+    # A candidate present before the run must not become cleanup-owned.
+    printf 'FROM existing\n' > "${workspace}/ollama-state/test-1b:latest"
+    run_execution_workspace "$workspace" >/dev/null
+    run=$(cat "${workspace}/src/results/latest-run.txt")
+    select_test_roles "$workspace"
+    if PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" bash "${workspace}/src/11-cleanup.sh" "$run" >/dev/null 2>&1; then
+        fail "cleanup accepted unverified role selection"
+    fi
+    PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" PIPELINE_RESULTS_DIR="$run" bash "${workspace}/src/08-alias.sh" >/dev/null
+    PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" bash "${workspace}/src/11-cleanup.sh" "$run" >/dev/null
+    [[ -f "${workspace}/ollama-state/test-1b:latest" && -f "${workspace}/ollama-state/user-model:latest" ]] || fail "cleanup removed pre-existing model"
+    [[ -f "${workspace}/ollama-state/default:latest" && -f "${workspace}/ollama-state/code:latest" && -f "${workspace}/ollama-state/fast:latest" ]] || fail "cleanup removed final aliases"
+    pass "cleanup requires verified roles and preserves pre-existing candidates"
+}
+
+test_cleanup_removes_new_interim_models_only() {
+    local workspace run
+    workspace=$(make_workspace "cleanup-new")
+    prepare_execution_workspace "$workspace"
+    run_execution_workspace "$workspace" >/dev/null
+    run=$(cat "${workspace}/src/results/latest-run.txt")
+    select_test_roles "$workspace"
+    PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" PIPELINE_RESULTS_DIR="$run" bash "${workspace}/src/08-alias.sh" >/dev/null
+    PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" bash "${workspace}/src/11-cleanup.sh" "$run" >/dev/null
+    [[ ! -f "${workspace}/ollama-state/test-1b:latest" ]] || fail "new interim model was retained"
+    [[ -f "${workspace}/ollama-state/user-model:latest" && -f "${workspace}/ollama-state/default:latest" ]] || fail "cleanup removed protected model"
+    pass "cleanup removes only new managed interim models"
+}
+
+test_alias_failure_blocks_cleanup() {
+    local workspace run
+    workspace=$(make_workspace "alias-failure")
+    prepare_execution_workspace "$workspace"
+    run_execution_workspace "$workspace" >/dev/null
+    run=$(cat "${workspace}/src/results/latest-run.txt")
+    select_test_roles "$workspace"
+    printf 'FROM previous-working-model\nPARAMETER num_ctx 8192\n' > "${workspace}/ollama-state/fast:latest"
+    if PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" PIPELINE_RESULTS_DIR="$run" FAIL_ROLE=fast bash "${workspace}/src/08-alias.sh" >/dev/null 2>&1; then
+        fail "role creation failure reported success"
+    fi
+    [[ ! -f "$run/aliases-verified-specs.cksum" ]] || fail "partial role rebuild authorized cleanup"
+    [[ -f "${workspace}/ollama-state/test-1b:latest" ]] || fail "alias failure removed interim model"
+    grep -q 'FROM previous-working-model' "${workspace}/ollama-state/fast:latest" || fail "failed rebuild removed previous role alias"
+    pass "failed role creation blocks cleanup"
+}
+
+test_cleanup_rejects_changed_specs() {
+    local workspace run
+    workspace=$(make_workspace "changed-specs")
+    prepare_execution_workspace "$workspace"
+    run_execution_workspace "$workspace" >/dev/null
+    run=$(cat "${workspace}/src/results/latest-run.txt")
+    select_test_roles "$workspace"
+    PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" PIPELINE_RESULTS_DIR="$run" bash "${workspace}/src/08-alias.sh" >/dev/null
+    yq -iy '.models[0].num_ctx = 16384' "${workspace}/src/specs.yaml"
+    if PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" bash "${workspace}/src/11-cleanup.sh" "$run" >/dev/null 2>&1; then
+        fail "cleanup accepted specs modified after verification"
+    fi
+    [[ -f "${workspace}/ollama-state/test-1b:latest" ]] || fail "changed specs caused deletion"
+    pass "cleanup rejects changed specs before any removal"
+}
+
 test_filter_honors_configured_headroom
 test_filter_rejects_unknown_vram
 test_discovery_survives_unavailable_sources
@@ -238,3 +434,10 @@ test_ollama_backend_routing
 test_unattended_runner_records_failure
 test_pull_preserves_configured_alias
 test_failed_pull_removes_candidate
+test_runner_requires_research_handoff
+test_runner_produces_isolated_review_packet
+test_runner_does_not_publish_failed_inference
+test_cleanup_requires_verified_aliases_and_preserves_existing_models
+test_cleanup_removes_new_interim_models_only
+test_alias_failure_blocks_cleanup
+test_cleanup_rejects_changed_specs

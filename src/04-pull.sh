@@ -8,12 +8,12 @@ set -Eeuo pipefail
 # Reads: results/qualifying.txt
 # Outputs: results/pull-status.txt
 #
-# Pulls are sequential (one at a time) to avoid timeout issues.
-# Each model takes 1-3 minutes. Re-running skips already-pulled models.
+# Pulls are sequential (one at a time), without execution deadlines.
+# Re-running in the same results directory skips already-pulled models.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
-RESULTS_DIR="${SCRIPT_DIR}/results"
+RESULTS_DIR="${PIPELINE_RESULTS_DIR:-${SCRIPT_DIR}/results}"
 QUALIFYING="${RESULTS_DIR}/qualifying.txt"
 STATUS="${RESULTS_DIR}/pull-status.txt"
 
@@ -80,7 +80,6 @@ else
     log_info "Pulling all ${#models_to_pull[@]} qualifying models (sequential)"
 fi
 
-log_info "Estimated time: $(( ${#models_to_pull[@]} * 2 ))-$(( ${#models_to_pull[@]} * 3 )) minutes"
 log_info ""
 
 # --- Pull each model sequentially ---
@@ -96,9 +95,10 @@ for line in "${models_to_pull[@]}"; do
 
     log_info "==> Pulling: $tag"
     log_info "    Target: $target"
-    log_info "    This may take 1-3 minutes..."
+    log_info "    Waiting for Ollama; download duration depends on network and model size."
 
     if ollama pull "$target" >/dev/null 2>&1; then
+        ollama_model_name "$target" >> "${RESULTS_DIR}/managed-models.txt"
         log_ok "Pulled successfully."
     else
         echo "FAIL|$tag" >> "$STATUS"
@@ -119,6 +119,7 @@ for line in "${models_to_pull[@]}"; do
         echo "CREATE_FAIL|$tag" >> "$STATUS"
         continue
     fi
+    ollama_model_name "$source_alias" >> "${RESULTS_DIR}/managed-models.txt"
 
     ollama stop "$tag" >/dev/null 2>&1 || true
     ollama rm "$tag" >/dev/null 2>&1 || true
@@ -127,6 +128,7 @@ for line in "${models_to_pull[@]}"; do
     fi
 
     if printf 'FROM %s\nPARAMETER num_ctx %s\n' "$source_alias" "$default_context" | ollama create "$tag" -f /dev/stdin >/dev/null 2>&1; then
+        ollama_model_name "$tag" >> "${RESULTS_DIR}/managed-models.txt"
         actual=$(ollama show --modelfile "$tag" 2>/dev/null | awk '$1=="PARAMETER" && $2=="num_ctx" {print $3; exit}')
         if [[ "$actual" == "$default_context" ]]; then
             log_ok "    Alias created and verified (ctx=$actual)"

@@ -141,7 +141,7 @@ today=$(date +%Y-%m-%d)
 
 # --- Source 1: Ollama library ---
 log_info "Polling Ollama library..."
-if library_html=$(curl -fsSL --max-time 30 https://ollama.com/library 2>/dev/null); then
+if library_html=$(curl -fsSL https://ollama.com/library 2>/dev/null); then
     while read -r name; do
         [[ -n "$name" ]] || continue
         echo "$name" | grep -qiE "$EXCLUDE_PATTERN" && continue
@@ -156,7 +156,7 @@ fi
 log_info "Polling HuggingFace orgs..."
 ORGS="deepseek-ai Qwen THUDM MiniMaxAI mistralai"
 for org in $ORGS; do
-    if models_json=$(curl -fsSL --max-time 30 "https://huggingface.co/api/models?author=${org}&search=gguf&limit=15" 2>/dev/null); then
+    if models_json=$(curl -fsSL "https://huggingface.co/api/models?author=${org}&search=gguf&limit=15" 2>/dev/null); then
         while read -r model; do
             [[ -n "$model" ]] || continue
             name=$(echo "$model" | sed 's|.*/||')
@@ -171,7 +171,7 @@ done
 
 # --- Source 3: HuggingFace recent GGUFs (limited) ---
 log_info "Polling HuggingFace recent GGUFs..."
-if recent_json=$(curl -fsSL --max-time 30 "https://huggingface.co/api/models?search=gguf&sort=createdAt&limit=30" 2>/dev/null); then
+if recent_json=$(curl -fsSL "https://huggingface.co/api/models?search=gguf&sort=createdAt&limit=30" 2>/dev/null); then
     while read -r model; do
         [[ -n "$model" ]] || continue
         name=$(echo "$model" | sed 's|.*/||')

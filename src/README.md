@@ -1,19 +1,111 @@
 # Local LLM Model Evaluator
 
-You are an LLM running in an OpenCode session with access to the local filesystem.
-This README is your instruction manual. Follow the steps in order. Do not skip steps.
+You are an LLM with access to the local filesystem. This workflow has three
+phases with explicit handoffs. By default, execute **Phase A only**, then stop.
+Do not launch long-running inference or downloads from the agent harness.
+
+## Phase boundaries
+
+### Phase A — LLM research (Steps 00–02)
+
+Check prerequisites, assess hardware, research this week's model releases and
+community experience, then run public-source discovery. Record exact pullable
+references, artifact sizes where available, intended roles, and evidence URLs.
+An MoE's active parameter count is not its total weight-memory requirement.
+
+Write `results/research.md` containing:
+- research date, machine/hardware and VRAM budget;
+- candidate tags, target roles, rationale and evidence URLs;
+- any existing model deliberately reconsidered this week;
+- uncertainties, unavailable sources, and any unresolved prerequisite problems.
+
+Validate `specs.yaml` with Python `yq` (`yq -e '.' specs.yaml >/dev/null`).
+Hand the human this command, to run from
+the repository root in a terminal outside the harness, **then stop**:
+
+```bash
+bash src/10-run-unattended.sh > src/results/unattended.log 2>&1
+```
+
+The command runs in the foreground; leave the terminal open, or use a persistent
+terminal session if disconnecting. There is no execution deadline. No agent
+needs to poll, babysit, or wait on a shell tool while this command runs.
+
+### Phase B — Human starts scripts (Steps 03–06)
+
+The runner records progress in `results/unattended-status.txt`, uses a fresh
+`results/runs/run.*` directory, and publishes `results/review.md` only when ready.
+The run directory contains the research/specs snapshot, pre-run Ollama inventory,
+pull status, benchmark outputs, evaluation responses, and managed-model ledger.
+Previous runs are preserved; stale outputs are not reused as current evidence.
+Use one run at a time per checkout; do not edit `specs.yaml` during Phase B.
+
+On successful completion, hand the LLM this prompt:
+
+> Read src/README.md and src/results/review.md. Perform Phase C for that run only.
+
+On failure or cancellation, do not request scoring or cleanup. Give the agent the
+status and log for diagnosis. A new invocation starts a fresh run, not a resume.
+
+### Phase C — LLM review and finalization (Step 07)
+
+Require `execution-complete` in the run named by `results/review.md`. Read only
+that run's evidence, score the responses, and record scores/reasons in the run's
+`scores.yaml`. Update `specs.yaml` as described in Step 07. Target **3–6 useful
+convenience aliases**, allowing shared underlying models. Do not fabricate a
+specialized capability or promote a failing model just to reach a count.
+
+Use this structure for `scores.yaml` (one entry per evaluated model; scores are
+integers from 1–5). Include a reason for each score and evidence for specialized
+roles; do not infer them from a model's name alone:
+
+```yaml
+models:
+  - tag: exact-candidate-tag
+    reasoning_score: 4
+    coding_score: 4
+    instruction_score: 4
+    measured_tok_per_sec: 25.0
+    decision: promote # or reject
+    reasons:
+      reasoning: "Correct answer and working; eval/<safe-name>/reasoning.txt"
+      coding: "Correct implementation; eval/<safe-name>/coding.txt"
+      instruction: "Follows constraints; eval/<safe-name>/instruction.txt"
+roles:
+  default: selected-model-alias
+  code: selected-model-alias
+  fast: selected-model-alias
+```
+
+After selecting roles, run from the repository root (replace the run path with
+the exact path in the review packet):
+
+```bash
+PIPELINE_RESULTS_DIR=/path/to/run bash src/07-report.sh > /path/to/run/report.md
+PIPELINE_RESULTS_DIR=/path/to/run bash src/08-alias.sh
+bash src/11-cleanup.sh /path/to/run
+```
+
+Alias creation reuses evaluated local models where available. If it needs a
+long-running pull, hand that command back to the human rather than imposing a
+harness deadline. Cleanup requires a successful full alias rebuild against the
+current specs, verifies the selected aliases, and removes only ledger-listed
+models absent from the pre-run inventory. Pre-existing models are preserved.
+If fewer than three roles can be supported, explain the shortfall and stop
+before cleanup. Report final aliases, evidence, removals and retained artifacts.
 
 ## Agent Operating Contract
 
 You are the pipeline operator, not its maintainer. **Use the repository scripts
 as-is. Do not edit, replace, bypass, or create alternate versions of pipeline
 scripts, skills, workflows, or evaluation prompts while executing this workflow.**
-The only runtime state you may update is `specs.yaml`, and only where a documented
-pipeline step requires LLM judgment (OSINT candidates and Step 07 promotion).
+You may edit `specs.yaml` only for documented research/promotion decisions, and
+write the documented `results/research.md` and run-specific `scores.yaml`.
+All other runtime artifacts are written by the scripts, not reconstructed by
+the agent. Do not create completion markers or verification receipts yourself.
 
-Continue automatically through every successful step. Do not ask the user to
-re-run commands, confirm normal progress, or re-initiate the workflow after an
-expected long-running operation. The user's goal is end-to-end completion.
+Continue automatically within the current phase. Stop at its documented
+handoff. Never infer permission to run Phase B from a request for Phase A.
 
 If a script, prerequisite, model pull, benchmark, evaluation, or verification
 fails unexpectedly, stop the pipeline and give the human-in-the-loop (HITL) a
@@ -36,27 +128,16 @@ The user has:
 - Ollama installed (native or Docker)
 - Internet connection
 
-You (the LLM) handle everything else.
+The LLM handles research and review; the human starts the deterministic runner.
 
-## Tool Invocation Notes (for the LLM)
+## Execution duration
 
-The `shell` tool has a default timeout of 120000ms (2 minutes).
-Long-running steps require explicit timeout. **Always set the timeout parameter.**
-
-| Step | Timeout (ms) | Why |
-|------|-------------|-----|
-| 00-prereqs | 30000 | Tool checks only |
-| 01-assess | 30000 | Hardware detection |
-| 02-discover | 60000 | Web search + API calls |
-| 03-filter | 10000 | Local filtering |
-| 04-pull (single) | 300000 | 1 model, 1-3 min |
-| 04-pull (all) | 600000 | 10+ models, 10-30 min |
-| 05-benchmark | 300000 | 1-2 min per model |
-| 06-evaluate | 600000 | 3 prompts per model, thinking models are slow |
-| 07-report | 10000 | Local aggregation |
-| 09-update | 300000 | Single model rebuild |
-
-**Important:** Default 120000ms is too short for pulls and benchmarks. Partial downloads resume automatically if interrupted.
+There are no fixed execution deadlines for network requests, pulls, warmup,
+benchmarks or evaluation. Duration depends on hardware, network, model size and
+source availability. Slow progress is not failure; explicit command errors are.
+An actually stuck operation can wait indefinitely until explicitly cancelled.
+If a harness cannot run an operation without a deadline, hand it to the human
+to run outside the harness instead of guessing a larger deadline.
 
 ## Files
 
@@ -73,9 +154,14 @@ Long-running steps require explicit timeout. **Always set the timeout parameter.
 | `07-report.sh` | Generate markdown report |
 | `09-update.sh` | Rebuild single model alias with updated config |
 | `10-run-unattended.sh` | Durable runner for deterministic Steps 03–06 |
+| `11-cleanup.sh` | Verify final roles and remove only this run's new artifacts |
 | `lib/ollama.sh` | Shared native/Docker Ollama detection and command helpers |
 
 ## Steps
+
+Commands below assume `src/` as the working directory. Phase handoff commands
+above assume the repository root. Steps 03–06 are reference only for the LLM;
+the human-run Phase B runner executes them.
 
 ### STEP 00: Prerequisites
 
@@ -127,10 +213,10 @@ reasonably fit that budget with 100% GPU inference.
 
 Run these general-discovery queries:
 
-1. "new small language model 2026 self-hosted ollama"
+1. "new small language model <current year> self-hosted ollama this week"
 2. "mixture of experts breakthrough small model local"
 3. "new open weight model 3b 4b coding reasoning"
-4. "best small llm ollama 2026"
+4. "best small llm ollama <current year> this week"
 
 Then run role-targeted queries for each applicable role. Do not assume a general
 model can fill a specialized role: search specifically for `code`, `thinking`,
@@ -155,8 +241,8 @@ For each result, extract:
 - Whether it's available on HuggingFace or Ollama
 
 **Decision:** If you find a model that is:
-- Within the parameter/quantization range that fits the current VRAM budget (or
-  an MoE with similar active parameters)
+- Within the total quantized-weight and context-memory budget, including all
+  resident MoE experts rather than just active parameters
 - Available on HuggingFace or Ollama
 - Not already in `specs.yaml` (check `models:`, `rejected:`, `candidates:`)
 
@@ -233,35 +319,21 @@ bash 04-pull.sh              # Pull ALL qualifying models (sequential)
 bash 04-pull.sh <alias>      # Pull just one model
 ```
 
-Pulls upstream models one at a time (not concurrent) to avoid timeout issues.
-Each model takes 1-3 minutes. Re-running skips already-pulled models.
-
-**Timing:** Expect 1-3 minutes per model. 10 models = 10-30 minutes total.
-
-**LLM Action:**
-- If pulling all: run once, wait for completion. Set timeout to 300000ms (5 min) per invocation.
-- If pulling one at a time: loop through qualifying models. Each invocation returns in 1-3 min.
-- After each pull, check output for success/failure before continuing.
-- If a pull fails, retry or remove from qualifying list.
+Pulls upstream models sequentially, without an execution deadline. Within the
+same results directory, re-running skips successfully recorded pulls. Each new
+runner invocation gets a fresh directory and refreshes its qualifying models.
+Individual pull failures are recorded and removed from the qualifying list by
+the script; alias creation/verification failures stop the runner before review.
 
 **Output:** `results/pull-status.txt`
 
-**Important:** Do NOT set timeout below 120000ms. Partial downloads resume automatically.
+Partial downloads resume through Ollama. Never treat elapsed time as rejection evidence.
 
 ### Unattended deterministic run (Steps 03–06)
 
-After completing the Step 02 OSINT review, prefer the unattended runner when
-multiple models will be pulled, benchmarked, or evaluated:
-
-```bash
-nohup bash 10-run-unattended.sh > results/unattended.log 2>&1 &
-echo $! > results/unattended.pid
-```
-
-Do not ask the user to monitor this job. Inspect `results/unattended-status.txt`
-and `results/unattended.log` when the process completes. If the status is
-`COMPLETE`, continue directly to Step 07. If it is `FAILED`, stop and provide the
-HITL incident report described above; do not patch scripts or silently retry.
+These steps belong to Phase B, not the LLM's Phase A. Use the human-run command
+and completion handoff above. The runner owns sequencing and durable status.
+The per-step commands here are reference material for diagnosis/manual use.
 
 ---
 
@@ -277,12 +349,11 @@ bash 05-benchmark.sh <alias>      # Benchmark just one model
 ```
 
 For each model:
-1. Warmup: run "hello" (loads model into memory, 60s timeout)
-2. Benchmark: run standardized prompt with `--verbose` (280s timeout)
+1. Warmup: run "hello" (loads model into memory)
+2. Benchmark: run standardized prompt with `--verbose`
 3. Capture output + tok/s to `results/bench/<alias>.txt`
 
-**Internal timeouts:** 60s warmup, 280s benchmark per model.
-**Estimated time:** 1-2 minutes per model.
+Both warmup and benchmark wait for completion without execution deadlines.
 
 **Output:** `results/bench/<alias>.txt` for each model.
 
@@ -351,15 +422,19 @@ Review all benchmark and evaluation results. For each qualifying model:
 
 4. **Generate report:**
    ```bash
-   bash 07-report.sh | glow
+    PIPELINE_RESULTS_DIR=/path/to/run bash 07-report.sh
    ```
 
 5. **Create friendly aliases:**
    ```bash
-   bash 08-alias.sh
+    PIPELINE_RESULTS_DIR=/path/to/run bash 08-alias.sh
    ```
 
-**Output:** Updated `specs.yaml` with promoted/rejected models. Friendly aliases created. Clean candidate list.
+6. **Verify and clean up:** Run `bash 11-cleanup.sh /path/to/run` only after all
+   selected aliases are verified. Never manually delete unrelated Ollama models.
+
+**Output:** Updated `specs.yaml`, recorded scores, 3–6 verified convenience
+aliases where supported, and inventory-bounded cleanup of new interim models.
 
 **Role Assignment Guidelines:**
 - `default`: Highest coding_score among qualifying models
@@ -371,8 +446,8 @@ Review all benchmark and evaluation results. For each qualifying model:
 - `uncensored`: Uncensored model (if available)
 - On small machines (4GB), many roles collapse to the same model — that's OK
 - On large machines (32GB+), prefer LARGER models for frontier/default
-- Only create friendly aliases for roles that are meaningfully distinct
-- Remove old aliases that are no longer relevant
+- Target 3–6 useful friendly aliases; roles may share an underlying model
+- Do not remove pre-existing aliases without a separate ownership/retirement decision
 - Assign `null` to roles that can't be filled
 
 **Roles in specs.yaml:**
@@ -446,7 +521,8 @@ bash 09-update.sh code
 
 - All scripts are in the current directory
 - All output goes to `results/` subdirectory
-- `specs.yaml` is the single source of truth — never edit model lists manually, always through the pipeline
+- `specs.yaml` is the configuration source of truth; only Phase A research and
+  Phase C promotion/role decisions authorize LLM edits to model lists
 - The LLM's judgment points are: Step 02 (web search), Step 06 (scoring evals 1-5), Step 07 (promote/reject)
 - Everything else is deterministic bash
 - `rejected:` only tracks models that were pulled and tested (not VRAM-filtered)

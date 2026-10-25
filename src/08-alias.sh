@@ -14,9 +14,11 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
-RESULTS_DIR="${SCRIPT_DIR}/results"
+RESULTS_DIR="${PIPELINE_RESULTS_DIR:-${SCRIPT_DIR}/results}"
 
 mkdir -p "$RESULTS_DIR"
+# A failed or partial rebuild cannot authorize cleanup using an old receipt.
+rm -f "${RESULTS_DIR}/aliases-verified-specs.cksum"
 
 # --- Colors ---
 if [[ -t 1 ]]; then
@@ -78,15 +80,21 @@ create_role_alias() {
 
     log_info "==> Creating alias: $role → $model_alias (ctx=$context, thinking=$thinking)"
 
-    # Pull upstream if not available
+    # Prefer the evaluated local candidate; avoid downloading it again.
     local target
-    if [[ "$tag" == */* ]]; then
+    if ollama show "$tag" >/dev/null 2>&1; then
+        target="$tag"
+    elif [[ "$tag" == */* ]]; then
         target="hf.co/$tag"
     else
         target="$tag"
     fi
 
     if ! ollama show "$target" >/dev/null 2>&1; then
+        if [[ -n "${PIPELINE_RESULTS_DIR:-}" ]]; then
+            log_err "    Evaluated model '$target' is unavailable. Return to the human; do not download during Phase C."
+            return 1
+        fi
         log_info "    Pulling $target..."
         if ! ollama pull "$target" >/dev/null 2>&1; then
             log_err "    Failed to pull $target"
@@ -94,9 +102,8 @@ create_role_alias() {
         fi
     fi
 
-    # Stop/remove old alias
+    # Keep the old manifest until Ollama successfully replaces it.
     ollama stop "$role" >/dev/null 2>&1 || true
-    ollama rm "$role" >/dev/null 2>&1 || true
 
     # Build Modelfile
     local modelfile
@@ -120,14 +127,14 @@ PARAMETER thinking_effort $thinking_effort"
             log_ok "    Created and verified (ctx=$actual)"
         else
             log_warn "    Context mismatch: expected $context, got ${actual:-unset}"
+            return 1
         fi
     else
         log_err "    Failed to create alias '$role'"
         return 1
     fi
 
-    # Cleanup upstream
-    ollama rm "$target" >/dev/null 2>&1 || true
+    # Cleanup is a separate, inventory-bounded step after all roles verify.
 }
 
 # --- Determine which roles to create ---
@@ -147,6 +154,7 @@ mapfile -t role_names < <(yq -r '.roles | keys[]' "$SPEC_FILE" 2>/dev/null)
 
 created=0
 skipped=0
+failed=0
 
 for role in "${role_names[@]}"; do
     model_alias=$(yq -r ".roles.$role" "$SPEC_FILE" 2>/dev/null)
@@ -167,6 +175,7 @@ for role in "${role_names[@]}"; do
         (( created++ )) || true
     else
         log_warn "Failed to create alias for role: $role"
+        (( failed++ )) || true
     fi
     log_info ""
 done
@@ -176,3 +185,7 @@ log_info "Created: $created | Skipped: $skipped"
 log_info ""
 log_info "Installed models:"
 ollama ls
+[[ "$failed" -eq 0 ]]
+if [[ -z "$TARGET_ROLE" ]]; then
+    cksum < "$SPEC_FILE" > "${RESULTS_DIR}/aliases-verified-specs.cksum"
+fi

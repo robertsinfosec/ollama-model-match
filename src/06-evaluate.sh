@@ -8,11 +8,11 @@ set -Eeuo pipefail
 # Reads: results/qualifying.txt
 # Outputs: results/eval/<alias>/{reasoning,coding,instruction}.txt
 #
-# Internal timeout: 120s per prompt (360s total per model).
+# Inference runs until completion or explicit cancellation.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
-RESULTS_DIR="${SCRIPT_DIR}/results"
+RESULTS_DIR="${PIPELINE_RESULTS_DIR:-${SCRIPT_DIR}/results}"
 QUALIFYING="${RESULTS_DIR}/qualifying.txt"
 EVAL_DIR="${RESULTS_DIR}/eval"
 
@@ -79,14 +79,14 @@ for line in "${models_to_eval[@]}"; do
     log_info "==> Evaluating: $tag (priority: $priority)"
 
     # Warmup
-    echo "hello" | ollama_with_timeout 120 run "$tag" >/dev/null 2>&1 || true
+    echo "hello" | ollama run "$tag" >/dev/null
 
     for i in 0 1 2; do
         name="${EVAL_NAMES[$i]}"
         prompt="${EVAL_PROMPTS[$i]}"
         outfile="${model_eval_dir}/${name}.txt"
 
-        log_info "    Running: $name (timeout: 120s)"
+        log_info "    Running: $name"
         {
             echo "=== EVAL: $tag / $name ==="
             echo "Priority: $priority"
@@ -94,15 +94,11 @@ for line in "${models_to_eval[@]}"; do
             echo "Date: $(date -Iseconds)"
             echo ""
             echo "--- RESPONSE ---"
-            echo "$prompt" | ollama_with_timeout 120 run "$tag" 2>&1
+            echo "$prompt" | ollama run "$tag" 2>&1
             echo ""
             echo "--- END ---"
         } > "$outfile" 2>&1
 
-        # Check for timeout
-        if grep -q "Timed out" "$outfile" 2>/dev/null; then
-            log_warn "    Timed out after 120s"
-        fi
     done
 
     log_ok "    Outputs saved: $model_eval_dir/"

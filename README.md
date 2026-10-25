@@ -25,7 +25,8 @@ You have a GPU. You want to run local LLMs. But which ones fit? Which are fast e
 6. **Scores and promotes** winners to friendly aliases (`default`, `fast`, `code`, `thinking`, etc.)
 7. **Generates a report** with results
 
-The LLM does the judgment. The scripts do the work. You just say "go."
+The LLM does research and judgment. Scripts do the long-running work, with
+explicit handoffs rather than hours of agent-tool supervision.
 
 ## Quick Start
 
@@ -38,9 +39,22 @@ The LLM does the judgment. The scripts do the work. You just say "go."
 2. Open OpenCode (or Claude Code, or VS Code with Copilot) in this folder.
 
 3. Tell the LLM:
-   > "Read src/README.md and follow all instructions."
+   > "Read src/README.md. Complete Phase A research through Step 02, then hand it back to me."
 
-4. The LLM runs the pipeline automatically. You just monitor progress.
+4. Run the command provided by the LLM in a terminal outside the harness:
+   ```bash
+   bash src/10-run-unattended.sh > src/results/unattended.log 2>&1
+   ```
+   Leave the terminal open or use a persistent terminal session. The scripts
+   handle filtering, pulls, benchmarking and evaluation without execution deadlines.
+
+5. When the command succeeds, tell the LLM:
+   > "Read src/README.md and src/results/review.md. Perform Phase C analysis and cleanup for that run."
+
+The target is 3–6 verified convenience aliases, with newly created interim models
+removed only after successful verification. Models present before the run are
+preserved. If execution fails, provide the log/status for diagnosis instead of
+proceeding to scoring or cleanup.
 
 ## Supported Hardware
 
@@ -76,22 +90,22 @@ Step 04: Pull           → Pull qualifying models (one at a time)
 Step 05: Benchmark      → Warmup + measure tok/s
 Step 06: Evaluate       → 3 standardized prompts (reasoning, coding, instruction)
 Step 07: Score & Promote → LLM scores 1-5, promotes winners, rejects losers
-Step 08: (Utility)      → Rebuild single model alias with updated config
+Step 08: Role aliases    → Create and verify selected convenience aliases
+Step 09: (Utility)       → Rebuild single model alias with updated config
+Step 10: Runner          → Human launches deterministic Steps 03–06
+Step 11: Cleanup         → Remove only this run's new interim models
 ```
 
 The LLM's judgment points are Step 02 (web search), Step 06 (scoring), and Step 07 (promote/reject). Everything else is deterministic bash.
 
-## Timing Expectations
+## Long-running execution
 
-| Step | Duration | Notes |
-|------|----------|-------|
-| 00-01 | ~10 sec | Tool checks + hardware detection |
-| 02 | ~30-60 sec | Web search + API calls |
-| 03 | ~1 sec | Local filtering |
-| 04 | 1-3 min per model | Downloads 1-3GB per model |
-| 05 | 1-2 min per model | Warmup + benchmark |
-| 06 | 3-5 min per model | 3 prompts, thinking models are slow |
-| 07 | ~1 sec | Local aggregation |
+Network requests, downloads, warmup and inference have no fixed execution
+deadlines. Their duration depends on the machine, connection and upstream
+availability. A genuinely stuck operation waits until explicitly cancelled.
+Progress is recorded in `src/results/unattended-status.txt`; completed runs get
+isolated review packets under `src/results/runs/`. The LLM does not need to
+supervise the running command. Each runner invocation starts a fresh run.
 
 ## Project Structure
 
@@ -101,7 +115,7 @@ ollama-model-match/
 ├── src/
 │   ├── README.md                # Full instruction manual for LLMs
 │   ├── specs.yaml               # Single source of truth (generated)
-│   ├── 00-prereqs.sh ... 10-run-unattended.sh  # Pipeline scripts
+│   ├── 00-prereqs.sh ... 11-cleanup.sh  # Pipeline scripts
 │   ├── lib/ollama.sh             # Shared Ollama backend helpers
 │   └── results/                 # Generated at runtime (gitignored)
 ├── tests/run.sh                  # Behavioral test harness
