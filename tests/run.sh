@@ -2,6 +2,14 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../src/lib/tools.sh
+source "${ROOT_DIR}/src/lib/tools.sh"
+YQ_BIN="${MODEL_MATCH_TEST_YQ:-$YQ_BIN}"
+require_yq
+# Child fixtures may use a PATH-provided Go yq. This is test-only; runtime
+# scripts select their yq explicitly without changing PATH.
+PATH="$(dirname "$YQ_BIN"):${PATH}"
+export PATH
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
@@ -14,6 +22,8 @@ make_workspace() {
     mkdir -p "$workspace"
     cp -a "${ROOT_DIR}/src" "$workspace/src"
     rm -rf "$workspace/src/results"
+    rm -rf "$workspace/src/.tools"
+    rm -f "$workspace/src/specs.yaml"
     mkdir -p "$workspace/src/results"
     printf '%s\n' "$workspace"
 }
@@ -57,22 +67,45 @@ case "$command" in
         printf 'NAME ID SIZE MODIFIED\n'
         find "$state" -maxdepth 1 -type f -printf '%f id size now\n'
         ;;
-    pull) printf 'FROM upstream\n' > "${state}/$(normalize "$1")" ;;
+    pull)
+        printf 'FROM upstream\n' > "${state}/$(normalize "$1")"
+        [[ "${FAIL_PULL:-false}" == false ]] || exit 8
+        ;;
+    cp)
+        if [[ "${FAIL_PUBLISH:-}" == "$2" && "$1" == omm-role-* ]]; then
+            exit 8
+        fi
+        if [[ "${FAIL_RESTORE:-false}" == true && "$1" == omm-backup-* ]]; then
+            exit 8
+        fi
+        cp "${state}/$(normalize "$1")" "${state}/$(normalize "$2")"
+        ;;
+    ps)
+        printf 'NAME ID SIZE PROCESSOR CONTEXT UNTIL\n'
+        for file in "$state"/*; do
+            [[ -f "$file" ]] || continue
+            printf '%s id 1GB %s 8192 running\n' "${file##*/}" "${PLACEMENT:-100% GPU}"
+        done
+        ;;
     stop) ;;
     rm)
         printf '%s\n' "$1" >> "${state}/../removals.log"
         rm -f "${state}/$(normalize "$1")"
         ;;
     create)
-        [[ "${FAIL_ROLE:-}" != "$1" ]] || exit 8
+        if [[ -n "${FAIL_ROLE:-}" && ( "$FAIL_ROLE" == "$1" || "$1" == *-"$FAIL_ROLE" ) ]]; then
+            exit 8
+        fi
         destination=$(normalize "$1")
         contents=$(cat)
         source=$(awk '$1 == "FROM" {print $2; exit}' <<< "$contents")
         [[ -f "${state}/$(normalize "$source")" ]] || exit 1
         printf '%s\n' "$contents" > "${state}/${destination}"
+        [[ "${FAIL_CREATE:-}" != "$1" ]] || exit 8
         ;;
     show)
         if [[ "$1" == '--modelfile' ]]; then
+            printf '# Display header for %s\n' "$2"
             cat "${state}/$(normalize "$2")"
         else
             [[ -f "${state}/$(normalize "$1")" ]]
@@ -105,7 +138,24 @@ run_execution_workspace() {
 
 select_test_roles() {
     local workspace="$1"
-    yq -iy '.models = [{alias: "test-1b", tag: "test-1b", num_ctx: 8192}] | .roles = {default: "test-1b", fast: "test-1b", code: "test-1b"}' "${workspace}/src/specs.yaml"
+    yq -i '.models = [{"alias": "test-1b", "tag": "test-1b", "num_ctx": 8192}] | .roles = {"default": "test-1b", "fast": "test-1b", "code": "test-1b"}' "${workspace}/src/specs.yaml"
+    if [[ -f "${workspace}/src/results/latest-run.txt" ]]; then
+        local run
+        run=$(cat "${workspace}/src/results/latest-run.txt")
+        cat > "${run}/scores.yaml" <<'YAML'
+models:
+  - tag: test-1b
+    reasoning_score: 4
+    coding_score: 4
+    instruction_score: 4
+    measured_tok_per_sec: 25
+    decision: promote
+    reasons:
+      reasoning: Correct response in this run.
+      coding: Correct response in this run.
+      instruction: Correct response in this run.
+YAML
+    fi
 }
 
 test_filter_honors_configured_headroom() {
@@ -419,7 +469,7 @@ test_cleanup_rejects_changed_specs() {
     run=$(cat "${workspace}/src/results/latest-run.txt")
     select_test_roles "$workspace"
     PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" PIPELINE_RESULTS_DIR="$run" bash "${workspace}/src/08-alias.sh" >/dev/null
-    yq -iy '.models[0].num_ctx = 16384' "${workspace}/src/specs.yaml"
+    yq -i '.models[0].num_ctx = 16384' "${workspace}/src/specs.yaml"
     if PATH="${workspace}/bin:${PATH}" OLLAMA_STATE="${workspace}/ollama-state" bash "${workspace}/src/11-cleanup.sh" "$run" >/dev/null 2>&1; then
         fail "cleanup accepted specs modified after verification"
     fi
@@ -441,3 +491,8 @@ test_cleanup_requires_verified_aliases_and_preserves_existing_models
 test_cleanup_removes_new_interim_models_only
 test_alias_failure_blocks_cleanup
 test_cleanup_rejects_changed_specs
+
+# shellcheck source=prereqs.sh
+source "${ROOT_DIR}/tests/prereqs.sh"
+# shellcheck source=production.sh
+source "${ROOT_DIR}/tests/production.sh"

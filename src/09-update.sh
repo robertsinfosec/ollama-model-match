@@ -10,6 +10,9 @@ set -Eeuo pipefail
 # Fails fast with clear messages if config is invalid or unsupported.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/tools.sh
+source "${SCRIPT_DIR}/lib/tools.sh"
+require_yq
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
 
 # --- Colors ---

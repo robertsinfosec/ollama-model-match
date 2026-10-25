@@ -4,14 +4,32 @@ You are an LLM with access to the local filesystem. This workflow has three
 phases with explicit handoffs. By default, execute **Phase A only**, then stop.
 Do not launch long-running inference or downloads from the agent harness.
 
+## Working directory
+
+All commands in this manual run from the directory containing this README and
+`00-prereqs.sh`. In a Git checkout, change to `src/` first. In an extracted release
+ZIP, this is the extraction directory; there is no enclosing `src/` directory.
+
 ## Phase boundaries
 
 ### Phase A — LLM research (Steps 00–02)
 
-Check prerequisites, assess hardware, research this week's model releases and
+Run `bash 00-prereqs.sh --yes`. Agents accept all
+supported dependency offers, including optional Glow. If administrator
+credentials or an unsupported installation method are needed, report the exact
+command to the human; do not loop or attempt to bypass permissions.
+
+Then assess hardware, research this week's model releases and
 community experience, then run public-source discovery. Record exact pullable
 references, artifact sizes where available, intended roles, and evidence URLs.
 An MoE's active parameter count is not its total weight-memory requirement.
+
+For weekly refreshes, include the model tags behind the currently selected role
+aliases in `candidates:` with `retest: true`, even if already curated. Refresh
+artifact-size evidence where possible. Reconsider rejected models only with an
+explicit reason recorded in the research handoff. Without `retest: true`, known
+curated/rejected tags retain the existing skip behavior. Update existing candidate
+entries rather than duplicating tags.
 
 Write `results/research.md` containing:
 - research date, machine/hardware and VRAM budget;
@@ -19,12 +37,19 @@ Write `results/research.md` containing:
 - any existing model deliberately reconsidered this week;
 - uncertainties, unavailable sources, and any unresolved prerequisite problems.
 
-Validate `specs.yaml` with Python `yq` (`yq -e '.' specs.yaml >/dev/null`).
-Hand the human this command, to run from
-the repository root in a terminal outside the harness, **then stop**:
+Use **Mike Farah yq v4**, never Python yq. Scripts select the repo-local verified
+binary automatically. Before invoking `yq` directly,
+source the same helper so a different system `yq` cannot take precedence:
 
 ```bash
-bash src/10-run-unattended.sh > src/results/unattended.log 2>&1
+source lib/tools.sh
+yq -e '.' specs.yaml >/dev/null
+```
+Hand the human this command, to run from
+the script directory in a terminal outside the harness, **then stop**:
+
+```bash
+bash 10-run-unattended.sh > results/unattended.log 2>&1
 ```
 
 The command runs in the foreground; leave the terminal open, or use a persistent
@@ -42,7 +67,7 @@ Use one run at a time per checkout; do not edit `specs.yaml` during Phase B.
 
 On successful completion, hand the LLM this prompt:
 
-> Read src/README.md and src/results/review.md. Perform Phase C for that run only.
+> Read README.md and results/review.md. Perform Phase C for that run only.
 
 On failure or cancellation, do not request scoring or cleanup. Give the agent the
 status and log for diagnosis. A new invocation starts a fresh run, not a resume.
@@ -54,6 +79,8 @@ that run's evidence, score the responses, and record scores/reasons in the run's
 `scores.yaml`. Update `specs.yaml` as described in Step 07. Target **3–6 useful
 convenience aliases**, allowing shared underlying models. Do not fabricate a
 specialized capability or promote a failing model just to reach a count.
+Upsert promoted entries by tag/alias; a retest updates the existing entry, not a
+duplicate. Preserve its context/thinking configuration unless deliberately changed.
 
 Use this structure for `scores.yaml` (one entry per evaluated model; scores are
 integers from 1–5). Include a reason for each score and evidence for specialized
@@ -77,13 +104,13 @@ roles:
   fast: selected-model-alias
 ```
 
-After selecting roles, run from the repository root (replace the run path with
+After selecting roles, run from the script directory (replace the run path with
 the exact path in the review packet):
 
 ```bash
-PIPELINE_RESULTS_DIR=/path/to/run bash src/07-report.sh > /path/to/run/report.md
-PIPELINE_RESULTS_DIR=/path/to/run bash src/08-alias.sh
-bash src/11-cleanup.sh /path/to/run
+PIPELINE_RESULTS_DIR=/path/to/run bash 07-report.sh > /path/to/run/report.md
+PIPELINE_RESULTS_DIR=/path/to/run bash 08-alias.sh
+bash 11-cleanup.sh /path/to/run
 ```
 
 Alias creation reuses evaluated local models where available. If it needs a
@@ -93,6 +120,13 @@ current specs, verifies the selected aliases, and removes only ledger-listed
 models absent from the pre-run inventory. Pre-existing models are preserved.
 If fewer than three roles can be supported, explain the shortfall and stop
 before cleanup. Report final aliases, evidence, removals and retained artifacts.
+
+Phase C validates scores, reasons, measured throughput and passing decisions
+against the completed run before changing role aliases. All new role manifests
+are staged first; publication failures restore the previous role set. If Ollama
+also refuses restoration, the command fails and retains backups plus the printed
+`transaction.*/recovery.txt` manifest for human recovery. Do not delete these
+backups or proceed to cleanup after such a failure.
 
 ## Agent Operating Contract
 
@@ -159,8 +193,7 @@ to run outside the harness instead of guessing a larger deadline.
 
 ## Steps
 
-Commands below assume `src/` as the working directory. Phase handoff commands
-above assume the repository root. Steps 03–06 are reference only for the LLM;
+All commands use the script directory as the working directory. Steps 03–06 are reference only for the LLM;
 the human-run Phase B runner executes them.
 
 ### STEP 00: Prerequisites
@@ -169,11 +202,34 @@ the human-run Phase B runner executes them.
 **Script:** `00-prereqs.sh`
 
 ```bash
-bash 00-prereqs.sh
+bash 00-prereqs.sh --yes
 ```
 
-Checks for required tools (`yq`, `jq`, `curl`) and finds Ollama (native or Docker).
-Verifies Ollama is responsive.
+Checks required tools (Mike Farah `yq` v4, `jq`, `curl`), offers optional Glow,
+and finds Ollama (native or Docker). Verifies Ollama is responsive.
+
+Humans can omit `--yes` for explanations and individual installation prompts.
+`--check` reports missing/unsupported dependencies without installing anything.
+Without a terminal, the default mode does not wait for input; agents must pass
+`--yes`. Declining Glow is allowed; declining a required tool prevents progress.
+
+Glow uses Snap on Linux when available, otherwise the supported package manager.
+Snap must have a responding daemon, not merely an installed client. Automatic
+package installation supports apt on Linux and Homebrew on macOS; other package
+managers receive manual installation guidance. Agent `--yes` mode never waits
+for a sudo password, even if the harness provides a terminal.
+`yq` uses a pinned, SHA256-verified upstream binary in `.tools/bin/` beside the
+pipeline scripts (`src/.tools/bin/` in a checkout), without
+Python, Snap confinement, or replacing the system executable. Automatic binary
+installation supports Linux/macOS on x86-64 and ARM64. Other platforms get manual
+installation guidance. Package installs may need administrator privileges; agents
+use non-interactive sudo and stop for human help if credentials are unavailable.
+
+Supported `yq` is v4.44.3 or newer within v4; the downloader pins v4.54.1. Runtime
+selection affects only `yq`, not the process PATH or unrelated commands. This
+build also requires Bash 4.4+ and compatible `grep -P` / `date -Iseconds` tools.
+Stock macOS does not supply all of these; setup reports the requirements instead
+of promising an untested native configuration.
 
 **If this fails:** Report the error to the user. Do not continue.
 
@@ -255,6 +311,7 @@ Then append it to `specs.yaml` under `candidates:` with:
   priority: high
   discovered: <today>
   status: new
+  retest: true # only when intentionally refreshing/reconsidering a known tag
 ```
 
 Set `target_roles` to the role(s) supported by the model's published purpose or
@@ -301,6 +358,10 @@ bash 03-filter.sh
 Checks VRAM budget for each candidate (estimated from tag name).
 Budget = `gpu_vram_gb - vram_headroom_gb` (default 4GB - 1GB = 3GB).
 Only models that fit 100% in GPU pass (no CPU offload).
+These are preliminary estimates, not proof of placement. After warmup, the
+benchmark/evaluation scripts require Ollama to report `100% GPU` for GPU-only
+runs. Explicit CPU-only mode retains its existing behavior. An unrecognized
+parameter count requires artifact-size metadata; `32b` must not match `2b`.
 
 **Output:** `results/qualifying.txt`
 
@@ -324,6 +385,8 @@ same results directory, re-running skips successfully recorded pulls. Each new
 runner invocation gets a fresh directory and refreshes its qualifying models.
 Individual pull failures are recorded and removed from the qualifying list by
 the script; alias creation/verification failures stop the runner before review.
+Existing candidate/upstream manifests are snapshotted before pulling; failed
+pulls or rebuilds restore those names. Backups are retained if restoration fails.
 
 **Output:** `results/pull-status.txt`
 
@@ -350,8 +413,9 @@ bash 05-benchmark.sh <alias>      # Benchmark just one model
 
 For each model:
 1. Warmup: run "hello" (loads model into memory)
-2. Benchmark: run standardized prompt with `--verbose`
-3. Capture output + tok/s to `results/bench/<alias>.txt`
+2. Verify actual GPU placement against the policy written by Step 03
+3. Benchmark: run standardized prompt with `--verbose`
+4. Capture output + tok/s to `results/bench/<alias>.txt`
 
 Both warmup and benchmark wait for completion without execution deadlines.
 
@@ -423,7 +487,11 @@ Review all benchmark and evaluation results. For each qualifying model:
 4. **Generate report:**
    ```bash
     PIPELINE_RESULTS_DIR=/path/to/run bash 07-report.sh
-   ```
+    ```
+
+    Save the Markdown report first. When Glow is installed, use `glow - < report.md`
+    to display it nicely; otherwise read the saved file as plain text. A missing
+    or failing optional renderer is not a pipeline failure.
 
 5. **Create friendly aliases:**
    ```bash
@@ -526,4 +594,7 @@ bash 09-update.sh code
 - The LLM's judgment points are: Step 02 (web search), Step 06 (scoring evals 1-5), Step 07 (promote/reject)
 - Everything else is deterministic bash
 - `rejected:` only tracks models that were pulled and tested (not VRAM-filtered)
+- Mutating execution/finalization phases share a per-directory lock. Concurrent
+  phases are refused. After a crash, inspect the lock's PID and recovery files
+  before a human removes a stale lock; never automatically steal it.
 - For unsupported GPUs (Snapdragon), models will run on CPU only (very slow)

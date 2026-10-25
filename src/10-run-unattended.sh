@@ -14,6 +14,10 @@ mkdir -p "$RESULTS_DIR"
     printf 'Complete Phase A first: results/research.md is required.\n' >&2
     exit 1
 }
+# shellcheck source=lib/ollama.sh
+source "${SCRIPT_DIR}/lib/ollama.sh"
+acquire_pipeline_lock
+trap release_pipeline_lock EXIT
 mkdir -p "${RESULTS_DIR}/runs"
 PIPELINE_RESULTS_DIR=$(mktemp -d "${RESULTS_DIR}/runs/run.XXXXXXXX")
 export PIPELINE_RESULTS_DIR
@@ -21,9 +25,6 @@ cp "${RESULTS_DIR}/research.md" "${PIPELINE_RESULTS_DIR}/research.md"
 cp "${SCRIPT_DIR}/specs.yaml" "${PIPELINE_RESULTS_DIR}/specs-before.yaml"
 printf '%s\n' "$PIPELINE_RESULTS_DIR" > "${RESULTS_DIR}/latest-run.txt"
 printf 'NOT READY: execution in progress. Run directory: %s\n' "$PIPELINE_RESULTS_DIR" > "${RESULTS_DIR}/review.md"
-
-# shellcheck source=lib/ollama.sh
-source "${SCRIPT_DIR}/lib/ollama.sh"
 
 write_status() {
     printf '%s | %s\n' "$(date -Iseconds)" "$*" > "$STATUS_FILE"
@@ -68,7 +69,8 @@ Run directory: ${PIPELINE_RESULTS_DIR}
 
 Read this run's research.md, specs-before.yaml, qualifying.txt, pull-status.txt,
 bench/ and eval/. Do not use results from another run. Score only complete
-responses, record evidence and throughput, then follow Phase C in src/README.md.
+responses, record evidence and throughput, then follow Phase C in the README
+beside 00-prereqs.sh (src/README.md in a checkout, README.md in a release).
 
 Create and verify the selected convenience aliases before running cleanup.
 models-before.txt and managed-models.txt bound cleanup to this run's new models.

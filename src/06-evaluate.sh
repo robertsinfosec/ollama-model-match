@@ -80,6 +80,7 @@ for line in "${models_to_eval[@]}"; do
 
     # Warmup
     echo "hello" | ollama run "$tag" >/dev/null
+    verify_gpu_placement "$tag" "$RESULTS_DIR" || die "GPU placement verification failed for $tag."
 
     for i in 0 1 2; do
         name="${EVAL_NAMES[$i]}"

@@ -76,6 +76,7 @@ for line in "${models_to_bench[@]}"; do
     # Warmup
     log_info "    Warming up..."
     echo "hello" | ollama run "$tag" >/dev/null
+    verify_gpu_placement "$tag" "$RESULTS_DIR" || die "GPU placement verification failed for $tag."
 
     # Benchmark
     log_info "    Running benchmark..."

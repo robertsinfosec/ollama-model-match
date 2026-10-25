@@ -11,6 +11,9 @@ set -Eeuo pipefail
 # Always includes small models (1B-3B) for the "fast" role.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/tools.sh
+source "${SCRIPT_DIR}/lib/tools.sh"
+require_yq
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
 
 # --- Colors ---
@@ -91,9 +94,9 @@ log_info ""
 
 # --- Read known tags ---
 known_tags() {
-    yq -r '.models[].tag // empty' "$SPEC_FILE" 2>/dev/null
-    yq -r '.rejected[].tag // empty' "$SPEC_FILE" 2>/dev/null
-    yq -r '.candidates[].tag // empty' "$SPEC_FILE" 2>/dev/null
+    yq -r '.models[].tag | select(. != null)' "$SPEC_FILE"
+    yq -r '.rejected[].tag | select(. != null)' "$SPEC_FILE"
+    yq -r '.candidates[].tag | select(. != null)' "$SPEC_FILE"
 }
 
 is_known() {
@@ -203,7 +206,8 @@ sort -u "$tmpfile" | while IFS='|' read -r source org name; do
 
     priority=$(score_priority "$source" "$org" "$name")
 
-    yq -iy ".candidates += [{\"tag\": \"$tag\", \"source\": \"$source\", \"org\": \"$org\", \"priority\": \"$priority\", \"discovered\": \"$today\", \"status\": \"new\"}]" "$SPEC_FILE"
+    MM_TAG="$tag" MM_SOURCE="$source" MM_ORG="$org" MM_PRIORITY="$priority" MM_DATE="$today" \
+    yq -i '.candidates += [{"tag": strenv(MM_TAG), "source": strenv(MM_SOURCE), "org": strenv(MM_ORG), "priority": strenv(MM_PRIORITY), "discovered": strenv(MM_DATE), "status": "new"}]' "$SPEC_FILE"
 
     case "$priority" in
         high)   log_ok "NEW [high]: $tag (from $source)" ;;

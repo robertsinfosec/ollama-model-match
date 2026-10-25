@@ -12,6 +12,9 @@ set -Eeuo pipefail
 # Re-running in the same results directory skips already-pulled models.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/tools.sh
+source "${SCRIPT_DIR}/lib/tools.sh"
+require_yq
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
 RESULTS_DIR="${PIPELINE_RESULTS_DIR:-${SCRIPT_DIR}/results}"
 QUALIFYING="${RESULTS_DIR}/qualifying.txt"
@@ -36,6 +39,28 @@ die() { log_err "$*"; exit 1; }
 
 # shellcheck source=lib/ollama.sh
 source "${SCRIPT_DIR}/lib/ollama.sh"
+acquire_pipeline_lock
+pull_pending=false
+owned_source_alias=""
+rollback_pull() {
+    pull_pending=false
+    model_transaction_rollback
+}
+finish_pull() {
+    local code=$?
+    trap - EXIT
+    if [[ "$pull_pending" == true ]]; then
+        rollback_pull || code=1
+    fi
+    if [[ -n "$owned_source_alias" ]]; then
+        ollama rm "$owned_source_alias" >/dev/null 2>&1 || code=1
+    fi
+    release_pipeline_lock || code=1
+    exit "$code"
+}
+trap finish_pull EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 detect_ollama || die "No Ollama found."
 ollama ls >/dev/null || die "Cannot connect to Ollama."
@@ -60,7 +85,7 @@ remove_failed_candidate() {
     tmp_qualifying=$(mktemp)
     awk -F'|' -v candidate="$tag" '$1 != candidate' "$QUALIFYING" > "$tmp_qualifying"
     mv "$tmp_qualifying" "$QUALIFYING"
-    yq -iy --arg tag "$tag" 'del(.candidates[] | select(.tag == $tag))' "$SPEC_FILE"
+    MM_TAG="$tag" yq -i 'del(.candidates[] | select(.tag == strenv(MM_TAG)))' "$SPEC_FILE"
 }
 
 # --- Determine which models to pull ---
@@ -97,12 +122,18 @@ for line in "${models_to_pull[@]}"; do
     log_info "    Target: $target"
     log_info "    Waiting for Ollama; download duration depends on network and model size."
 
+    transaction_names=("$tag")
+    [[ "$target" == "$tag" ]] || transaction_names+=("$target")
+    model_transaction_begin "$RESULTS_DIR" "${transaction_names[@]}" || die "Cannot snapshot existing models; no pull was attempted."
+    pull_pending=true
+
     if ollama pull "$target" >/dev/null 2>&1; then
         ollama_model_name "$target" >> "${RESULTS_DIR}/managed-models.txt"
         log_ok "Pulled successfully."
     else
         echo "FAIL|$tag" >> "$STATUS"
         log_err "Failed to pull $target"
+        rollback_pull || die "Pull failed and previous models could not be fully restored."
         remove_failed_candidate "$tag"
         continue
     fi
@@ -110,22 +141,28 @@ for line in "${models_to_pull[@]}"; do
     # Create a temporary source alias so the configured alias can safely use the
     # same name as an upstream Ollama tag.
     default_context="8192"
-    source_alias="omm-source-$(printf '%s' "$tag" | cksum | awk '{print $1}')"
+    source_alias="omm-source-${TX_DIR##*/}"
     log_info "    Creating alias (ctx=$default_context)..."
 
-    ollama rm "$source_alias" >/dev/null 2>&1 || true
+    if ollama show "$source_alias" >/dev/null 2>&1; then
+        rollback_pull || die "Cannot restore models."
+        die "Temporary alias unexpectedly exists: $source_alias"
+    fi
+    owned_source_alias="$source_alias"
     if ! printf 'FROM %s\n' "$target" | ollama create "$source_alias" -f /dev/stdin >/dev/null 2>&1; then
         log_err "    Failed to create temporary source alias for $target"
         echo "CREATE_FAIL|$tag" >> "$STATUS"
+        rollback_pull || die "Cannot restore models after temporary alias failure."
+        if ollama show "$owned_source_alias" >/dev/null 2>&1; then
+            ollama rm "$owned_source_alias" >/dev/null 2>&1 || die "Cannot remove failed temporary alias $owned_source_alias."
+        fi
+        owned_source_alias=""
         continue
     fi
     ollama_model_name "$source_alias" >> "${RESULTS_DIR}/managed-models.txt"
 
     ollama stop "$tag" >/dev/null 2>&1 || true
-    ollama rm "$tag" >/dev/null 2>&1 || true
-    if [[ "$target" != "$tag" ]]; then
-        ollama rm "$target" >/dev/null 2>&1 || true
-    fi
+    configured=false
 
     if printf 'FROM %s\nPARAMETER num_ctx %s\n' "$source_alias" "$default_context" | ollama create "$tag" -f /dev/stdin >/dev/null 2>&1; then
         ollama_model_name "$tag" >> "${RESULTS_DIR}/managed-models.txt"
@@ -133,6 +170,7 @@ for line in "${models_to_pull[@]}"; do
         if [[ "$actual" == "$default_context" ]]; then
             log_ok "    Alias created and verified (ctx=$actual)"
             echo "OK|$tag" >> "$STATUS"
+            configured=true
         else
             log_warn "    Context mismatch: expected $default_context, got ${actual:-unset}"
             echo "CREATE_FAIL|$tag" >> "$STATUS"
@@ -142,8 +180,16 @@ for line in "${models_to_pull[@]}"; do
         echo "CREATE_FAIL|$tag" >> "$STATUS"
     fi
 
+    if [[ "$configured" == true ]]; then
+        pull_pending=false
+        model_transaction_discard || die "Model configured, but backup cleanup failed."
+    else
+        rollback_pull || die "Cannot restore models after alias verification failure."
+    fi
+
     # Cleanup the temporary source manifest. The configured alias remains.
-    ollama rm "$source_alias" >/dev/null 2>&1 || true
+    ollama rm "$source_alias" >/dev/null 2>&1 || die "Cannot remove temporary source alias $source_alias."
+    owned_source_alias=""
 
     log_info ""
 done

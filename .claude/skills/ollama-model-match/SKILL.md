@@ -7,8 +7,10 @@ description: Discover, filter, benchmark, and evaluate Ollama models for your ha
 
 Full details and handoff contracts are in `src/README.md`. Default to **Phase A
 only**, not an end-to-end agent-supervised run.
+Paths below are relative to the checkout root. The full manual uses the script
+directory (`src/` in a checkout, extraction root in a release); follow its working-directory rule.
 
-1. **Prereqs**: Run `src/00-prereqs.sh` — checks tools, finds Ollama (native/Docker).
+1. **Prereqs**: Run `bash src/00-prereqs.sh --yes` — accept supported prerequisite installs, including optional Glow; then verify Ollama (native/Docker). If administrator credentials are required, hand the exact command to the human instead of retrying.
 2. **Assess**: Run `src/01-assess.sh` — detects GPU (NVIDIA/AMD/Intel/Apple/Snapdragon), RAM, CPU, OS. Creates `specs.yaml`.
 3. **Discovery**: Use `websearch` for general and role-targeted OSINT recon, then run `src/02-discover.sh`. Search for VRAM-fitting candidates for `code`, `thinking`, `cyber`, and `uncensored` in addition to general/fast models; record supported roles in `target_roles`.
 4. **Handoff A**: Write `src/results/research.md` with candidate evidence, exact references, hardware budget and uncertainties. Give the human `bash src/10-run-unattended.sh > src/results/unattended.log 2>&1` to run outside the harness, then STOP.
@@ -28,6 +30,18 @@ only**, not an end-to-end agent-supervised run.
   Do not change repository code as a workaround.
 
 ## Key Rules
+
+- Only Mike Farah `yq` v4 is supported, not Python `yq`. Scripts select the
+  verified repo-local binary automatically. Before direct `yq` calls, source
+  `src/lib/tools.sh` from the repository root.
+- Minimum yq is 4.44.3 within v4. Selection does not change PATH. Setup requires
+  Bash 4.4+ and compatible grep/date tools; do not claim stock macOS works unchanged.
+- For a weekly refresh, include current role model tags with `retest: true` and
+  updated size evidence. Upsert existing registry entries after scoring, not duplicates.
+- Phase C requires complete run evidence and scores matching measured throughput.
+  Never bypass validation, placement checks, locks, or retained recovery backups.
+- Offer Glow for nicer Markdown output. A human may decline; agents use `--yes`.
+  Missing or failing Glow must not prevent reading the saved Markdown report.
 
 - Do not impose execution deadlines. If a harness cannot wait without a
   deadline, hand the operation to the human to run outside it.

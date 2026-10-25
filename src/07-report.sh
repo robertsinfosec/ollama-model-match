@@ -3,9 +3,12 @@ set -Eeuo pipefail
 
 # 07-report.sh — Generate markdown report from all results.
 # Reads: results/qualifying.txt, results/bench/*.txt, results/eval/*/*.txt
-# Outputs: markdown report to stdout (pipe to glow for pretty output)
+# Outputs: markdown to stdout; save first, optionally display with Glow.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/tools.sh
+source "${SCRIPT_DIR}/lib/tools.sh"
+require_yq
 RESULTS_DIR="${PIPELINE_RESULTS_DIR:-${SCRIPT_DIR}/results}"
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
 QUALIFYING="${RESULTS_DIR}/qualifying.txt"

@@ -56,6 +56,33 @@ removed only after successful verification. Models present before the run are
 preserved. If execution fails, provide the log/status for diagnosis instead of
 proceeding to scoring or cleanup.
 
+### Dependency setup
+
+```bash
+bash src/00-prereqs.sh         # Explain missing tools and offer installation
+bash src/00-prereqs.sh --yes   # Accept supported installs, including optional Glow
+bash src/00-prereqs.sh --check # Check only; never install
+```
+
+Agents use `--yes`. Required tools are **Mike Farah yq v4.44.3+ (within v4)**, `jq`, `curl`, and a
+working Ollama installation. Python `yq` is a different, unsupported product.
+The installer downloads a pinned, SHA256-verified `yq` into `src/.tools/bin/`; scripts
+select it specifically without changing PATH or replacing a system installation. For direct
+`yq` commands, first run `source src/lib/tools.sh` from this repository's root.
+
+Glow is offered because it makes Markdown reports nicer to read. You can decline
+it without breaking the workflow. On Linux, setup uses Snap when available;
+otherwise it uses a supported package manager (apt on Linux, Homebrew on macOS).
+An installed but unavailable Snap daemon falls back to the package manager.
+Administrator permission may be
+needed for package installation; an agent cannot supply your sudo password.
+
+The scripts require Bash 4.4+ and `grep -P` / `date -Iseconds` capabilities. macOS
+needs additional GNU tools/current Bash; its stock shell/tools are insufficient.
+For weekly refreshes, Phase A explicitly marks existing role models `retest: true`;
+known models remain excluded otherwise. GPU-only runs verify actual Ollama
+placement after warmup, rather than relying solely on memory estimates.
+
 ## Supported Hardware
 
 | GPU Vendor | Status | VRAM Detection |
