@@ -13,6 +13,9 @@ jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    environment:
+      name: OpenSSF Scorecard
+      url: https://scorecard.dev/viewer/?uri=github.com/${{ github.repository }}
     permissions:
       security-events: write
       id-token: write

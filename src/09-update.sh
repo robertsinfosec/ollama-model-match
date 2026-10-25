@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# 08-update.sh — Rebuild a single model alias with current specs.yaml config.
-# Usage: bash 08-update.sh <alias>
+# 09-update.sh — Rebuild a single model alias with current specs.yaml config.
+# Usage: bash 09-update.sh <alias>
 # Reads: specs.yaml (models section)
 # Outputs: updated alias in Ollama
 #
@@ -10,6 +10,9 @@ set -Eeuo pipefail
 # Fails fast with clear messages if config is invalid or unsupported.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/tools.sh
+source "${SCRIPT_DIR}/lib/tools.sh"
+require_yq
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
 
 # --- Colors ---
@@ -29,8 +32,8 @@ die() { log_err "$*"; exit 1; }
 # --- Parse arguments ---
 ALIAS="${1:-}"
 if [[ -z "$ALIAS" ]]; then
-    log_err "Usage: bash 08-update.sh <alias>"
-    log_err "Example: bash 08-update.sh code"
+    log_err "Usage: bash 09-update.sh <alias>"
+    log_err "Example: bash 09-update.sh code"
     exit 1
 fi
 
@@ -53,7 +56,7 @@ fi
 
 # --- Read model config ---
 tag=$(yq -r ".models[$model_index].tag" "$SPEC_FILE")
-context=$(yq -r ".models[$model_index].context // 8192" "$SPEC_FILE")
+context=$(yq -r ".models[$model_index].num_ctx // .models[$model_index].context // 8192" "$SPEC_FILE")
 thinking=$(yq -r ".models[$model_index].thinking // false" "$SPEC_FILE")
 thinking_effort=$(yq -r ".models[$model_index].thinking_effort // null" "$SPEC_FILE")
 roles=$(yq -r ".models[$model_index].roles // [] | join(\", \")" "$SPEC_FILE")
@@ -105,42 +108,10 @@ if [[ -z "$tag" || "$tag" == "null" ]]; then
     die "Model '$ALIAS' has no tag defined in specs.yaml."
 fi
 
-# --- Ollama backend detection ---
-OLLAMA_BACKEND=""
-OLLAMA_CONTAINER="${OLLAMA_CONTAINER:-}"
-detect_ollama() {
-    if command -v docker >/dev/null 2>&1; then
-        local containers id name image service
-        if containers="$(docker ps --no-trunc --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Label "com.docker.compose.service"}}' 2>/dev/null)"; then
-            while IFS='|' read -r id name image service; do
-                [[ -n "$id" ]] || continue
-                if [[ -n "$OLLAMA_CONTAINER" ]]; then
-                    [[ "$name" == "$OLLAMA_CONTAINER" || "$id" == "$OLLAMA_CONTAINER" ]] || continue
-                elif [[ "${name,,}" != *ollama* && "${service,,}" != *ollama* ]] && [[ ! "$image" =~ (^|/)ollama/ollama([:@]|$) ]]; then
-                    continue
-                fi
-                docker exec "$id" sh -c 'command -v ollama >/dev/null 2>&1' >/dev/null 2>&1 || continue
-                OLLAMA_BACKEND=docker; OLLAMA_CONTAINER="$id"
-                return 0
-            done <<<"$containers"
-        fi
-    fi
-    if [[ -n "$(type -P ollama)" ]]; then
-        OLLAMA_BACKEND=native
-    else
-        die "No Ollama found."
-    fi
-}
+# shellcheck source=lib/ollama.sh
+source "${SCRIPT_DIR}/lib/ollama.sh"
 
-ollama() {
-    if [[ "$OLLAMA_BACKEND" == "docker" ]]; then
-        docker exec "$OLLAMA_CONTAINER" ollama "$@"
-    else
-        command ollama "$@"
-    fi
-}
-
-detect_ollama
+detect_ollama || die "No Ollama found."
 ollama ls >/dev/null || die "Cannot connect to Ollama."
 
 # --- Determine pull target ---

@@ -50,7 +50,7 @@ jobs:
       - name: Create archive
         run: |
           cd src
-          zip -r "../ollama-model-match-${{ steps.version.outputs.version }}.zip" . -x "results/*" "specs.yaml" "*.bak"
+          zip -r "../ollama-model-match-${{ steps.version.outputs.version }}.zip" . -x "results/*" "specs.yaml" "*.bak" ".tools/*"
           cd ..
 
       - name: Install cosign
@@ -77,9 +77,10 @@ jobs:
             ## ollama-model-match ${{ steps.version.outputs.version }}
 
             ### Contents
-            - `00-prereqs.sh` through `08-update.sh` (pipeline scripts)
+            - `00-prereqs.sh` through `11-cleanup.sh` (pipeline scripts)
+            - `lib/` (shared dependency and Ollama helpers)
             - `README.md` (full instruction manual)
-            - `.opencode/skills/`, `.claude/skills/`, `.github/skills/` (skill definitions)
+            - Only distributable contents of `src/`; repository-level skills are not bundled
 
             ### Usage
             1. Download and extract the zip
@@ -88,6 +89,8 @@ jobs:
 
             ### Notes
             - `specs.yaml` and `results/` are generated at runtime (not included)
-            - Requires: `yq`, `jq`, `curl`, `ollama` installed on the target machine
+            - Setup: run `bash 00-prereqs.sh` for installation offers, or `--yes` for agent-run setup
+            - Requires Mike Farah `yq` v4 (not Python `yq`), `jq`, `curl`, and working Ollama
+            - Glow is offered for nicer Markdown output; it remains optional
             - Release artifact is signed with Sigstore (cosign). Verify with:
               `cosign verify-blob --certificate <cert> --signature <sig> <zip>`

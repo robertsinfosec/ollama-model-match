@@ -28,13 +28,19 @@ This project:
 
 ## Dependencies
 
-- `yq` (v3.x) — YAML parsing
+- Mike Farah `yq` (v4.44.3+ within v4) — YAML parsing; Python yq is not supported
 - `jq` — JSON parsing
 - `curl` — HTTP requests
 - `ollama` — Model management
 - `glow` (optional) — Markdown rendering
 
-Keep these tools updated to their latest versions.
+Setup offers installation with explicit confirmation, or `--yes` for agents.
+System package installs may require administrator privileges. The repo-local
+`yq` installer pins v4.54.1 and checks upstream SHA256 hashes before execution;
+update the pin and hashes together when upgrading. It does not replace system
+executables or change the general command search PATH. Automatic package installs
+use apt (Linux), Homebrew (macOS), or a responding Snap service for optional Glow;
+other environments get manual guidance. Agent `--yes` never prompts for sudo credentials.
 
 ## References
 

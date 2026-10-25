@@ -8,12 +8,11 @@ set -Eeuo pipefail
 # Reads: results/qualifying.txt
 # Outputs: results/bench/<alias>.txt (output + tok/s metrics)
 #
-# Internal timeout: 280s per model (under 300s tool timeout).
-# Warmup timeout: 60s.
+# Warmup and inference run until completion or explicit cancellation.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
-RESULTS_DIR="${SCRIPT_DIR}/results"
+RESULTS_DIR="${PIPELINE_RESULTS_DIR:-${SCRIPT_DIR}/results}"
 QUALIFYING="${RESULTS_DIR}/qualifying.txt"
 BENCH_DIR="${RESULTS_DIR}/bench"
 
@@ -34,42 +33,14 @@ die() { log_err "$*"; exit 1; }
 [[ -f "$SPEC_FILE" ]] || die "specs.yaml not found."
 [[ -f "$QUALIFYING" ]] || die "Run 03-filter.sh first."
 
-# --- Ollama backend detection ---
-OLLAMA_BACKEND=""
-OLLAMA_CONTAINER="${OLLAMA_CONTAINER:-}"
-detect_ollama() {
-    if command -v docker >/dev/null 2>&1; then
-        local containers id name image service
-        if containers="$(docker ps --no-trunc --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Label "com.docker.compose.service"}}' 2>/dev/null)"; then
-            while IFS='|' read -r id name image service; do
-                [[ -n "$id" ]] || continue
-                if [[ -n "$OLLAMA_CONTAINER" ]]; then
-                    [[ "$name" == "$OLLAMA_CONTAINER" || "$id" == "$OLLAMA_CONTAINER" ]] || continue
-                elif [[ "${name,,}" != *ollama* && "${service,,}" != *ollama* ]] && [[ ! "$image" =~ (^|/)ollama/ollama([:@]|$) ]]; then
-                    continue
-                fi
-                docker exec "$id" sh -c 'command -v ollama >/dev/null 2>&1' >/dev/null 2>&1 || continue
-                OLLAMA_BACKEND=docker; OLLAMA_CONTAINER="$id"
-                return 0
-            done <<<"$containers"
-        fi
-    fi
-    if [[ -n "$(type -P ollama)" ]]; then
-        OLLAMA_BACKEND=native
-    else
-        die "No Ollama found."
-    fi
+# shellcheck source=lib/ollama.sh
+source "${SCRIPT_DIR}/lib/ollama.sh"
+
+find_qualifying_model() {
+    awk -F'|' -v tag="$1" '$1 == tag { print; exit }' "$QUALIFYING"
 }
 
-ollama() {
-    if [[ "$OLLAMA_BACKEND" == "docker" ]]; then
-        docker exec "$OLLAMA_CONTAINER" ollama "$@"
-    else
-        command ollama "$@"
-    fi
-}
-
-detect_ollama
+detect_ollama || die "No Ollama found."
 ollama ls >/dev/null || die "Cannot connect to Ollama."
 
 # --- Standardized benchmark prompt ---
@@ -79,7 +50,7 @@ BENCH_PROMPT="Write a Python function to reverse a linked list. Include docstrin
 TARGET_ALIAS="${1:-}"
 
 if [[ -n "$TARGET_ALIAS" ]]; then
-    line=$(grep "^${TARGET_ALIAS}|" "$QUALIFYING" 2>/dev/null || true)
+    line=$(find_qualifying_model "$TARGET_ALIAS")
     if [[ -z "$line" ]]; then
         die "Model '$TARGET_ALIAS' not found in qualifying.txt"
     fi
@@ -91,7 +62,6 @@ else
 fi
 
 log_info "Prompt: $BENCH_PROMPT"
-log_info "Internal timeout: 280s per model"
 log_info ""
 
 # --- Benchmark each model ---
@@ -103,12 +73,13 @@ for line in "${models_to_bench[@]}"; do
 
     log_info "==> Benchmarking: $tag (priority: $priority)"
 
-    # Warmup (60s timeout)
+    # Warmup
     log_info "    Warming up..."
-    timeout 60 bash -c "echo hello | ollama run \"$tag\"" >/dev/null 2>&1 || true
+    echo "hello" | ollama run "$tag" >/dev/null
+    verify_gpu_placement "$tag" "$RESULTS_DIR" || die "GPU placement verification failed for $tag."
 
-    # Benchmark (280s timeout)
-    log_info "    Running benchmark (timeout: 280s)..."
+    # Benchmark
+    log_info "    Running benchmark..."
     {
         echo "=== BENCHMARK: $tag ==="
         echo "Priority: $priority"
@@ -116,18 +87,13 @@ for line in "${models_to_bench[@]}"; do
         echo "Date: $(date -Iseconds)"
         echo ""
         echo "--- OUTPUT ---"
-        echo "$BENCH_PROMPT" | timeout 280 ollama run "$tag" --verbose 2>&1
+        echo "$BENCH_PROMPT" | ollama run "$tag" --verbose 2>&1
         echo ""
         echo "--- END ---"
     } > "$outfile" 2>&1
 
-    # Check if timed out
-    if grep -q "Timed out" "$outfile" 2>/dev/null || [[ $? -eq 124 ]]; then
-        log_warn "    Timed out after 280s"
-    fi
-
     # Extract metrics
-    eval_rate=$(grep -oP 'eval rate:\s*\K[0-9.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
+    eval_rate=$(grep -oP '^eval rate:\s*\K[0-9.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
     prompt_rate=$(grep -oP 'prompt eval rate:\s*\K[0-9.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
     eval_count=$(grep -oP 'eval count:\s*\K[0-9]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
     total_dur=$(grep -oP 'total duration:\s*\K[0-9a-z.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
@@ -139,7 +105,7 @@ for line in "${models_to_bench[@]}"; do
             log_warn "    eval rate: ${eval_rate} tok/s (below 15 threshold) | prompt: ${prompt_rate} tok/s | tokens: ${eval_count}"
         fi
     else
-        log_err "    Could not parse metrics from output (model may have failed to load)"
+        die "Could not parse generation metrics from $outfile; review the output before continuing."
     fi
     log_info "    Output saved: $outfile"
     log_info ""

@@ -44,10 +44,12 @@ die() { log_err "$*"; exit 1; }
 7. Summary output
 
 ### Conventions
-- Use `yq -r` for YAML reads (raw output, no quotes)
-- Use `yq -iy` for in-place YAML edits
+- Use Mike Farah `yq` v4.44.3+ within v4; YAML consumers source `lib/tools.sh` and call `require_yq`
+- Use `yq -r` for YAML reads and `yq -i` for in-place edits (not Python's `-iy`)
+- Pass string values via environment variables and `strenv(...)`, not expression interpolation
+- Use `yq -o=json` when handing YAML data to `jq`; jq-specific expressions belong in `jq`
 - Use `awk` for floating-point comparisons
-- Use `timeout` for external commands that may hang
+- Do not impose execution deadlines on downloads or inference; allow explicit cancellation
 - Always check if required files exist before proceeding
 - Always detect Ollama backend (Docker or native) before calling ollama
 - Use `mapfile` for reading file lines into arrays

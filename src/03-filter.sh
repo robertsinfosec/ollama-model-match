@@ -10,8 +10,11 @@ set -Eeuo pipefail
 # LLM should verify estimates before pulling.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/tools.sh
+source "${SCRIPT_DIR}/lib/tools.sh"
+require_yq
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
-RESULTS_DIR="${SCRIPT_DIR}/results"
+RESULTS_DIR="${PIPELINE_RESULTS_DIR:-${SCRIPT_DIR}/results}"
 QUALIFYING="${RESULTS_DIR}/qualifying.txt"
 
 mkdir -p "$RESULTS_DIR"
@@ -33,40 +36,50 @@ die() { log_err "$*"; exit 1; }
 # --- Hardware specs ---
 gpu_vram=$(yq -r '.hardware.gpu_vram_gb' "$SPEC_FILE")
 gpu_vendor=$(yq -r '.hardware.gpu_vendor // "none"' "$SPEC_FILE")
+vram_headroom=$(yq -r '.thresholds.vram_headroom_gb // 1.0' "$SPEC_FILE")
 
 if [[ "$gpu_vram" == "0" || "$gpu_vendor" == "none" || "$gpu_vendor" == "snapdragon" ]]; then
     log_warn "No usable GPU detected (CPU-only mode)."
     log_warn "All candidates will pass filter. Expect very slow inference (1-5 tok/s)."
     log_info ""
     vram_budget="999"  # Pass everything
+    printf 'false\n' > "${RESULTS_DIR}/require-gpu.txt"
 else
-    vram_budget=$(awk -v v="$gpu_vram" 'BEGIN { printf "%.1f", v - 1.0 }')
+    vram_budget=$(awk -v v="$gpu_vram" -v h="$vram_headroom" 'BEGIN { printf "%.1f", v - h }')
     log_info "Filtering candidates by VRAM budget"
-    log_info "GPU: ${gpu_vram}GB | Budget: ${vram_budget}GB (1.0GB headroom)"
+    log_info "GPU: ${gpu_vram}GB | Budget: ${vram_budget}GB (${vram_headroom}GB headroom)"
     log_info ""
+    printf 'true\n' > "${RESULTS_DIR}/require-gpu.txt"
 fi
 
 # --- Estimate VRAM from tag name ---
 estimate_vram() {
     local tag="$1"
-    local lower
+    local lower sizes
     lower=$(echo "$tag" | tr '[:upper:]' '[:lower:]')
+    sizes=$(printf '%s\n' "$lower" | grep -oE '[0-9]+([.][0-9]+)?b' || true)
+    if [[ "$(printf '%s\n' "$sizes" | grep -c . || true)" -gt 1 ]]; then
+        echo "unknown" # Ambiguous total/active MoE sizes require metadata.
+        return
+    fi
 
     # Extract parameter count from name
-    if echo "$lower" | grep -qE '1\.5b'; then
-        echo "1.2"
-    elif echo "$lower" | grep -qE '2b'; then
-        echo "1.5"
-    elif echo "$lower" | grep -qE '3b'; then
-        echo "2.0"
-    elif echo "$lower" | grep -qE '4b'; then
-        echo "2.6"
+    if [[ "$lower" =~ (^|[^0-9.])([0-9]+([.][0-9]+)?)b([^a-z0-9]|$) ]]; then
+        # Match a complete size, not the '2b' suffix of '32b'. Preserve the
+        # existing estimates; unrecognized sizes require artifact metadata.
+        case "${BASH_REMATCH[2]}" in
+            1.5) echo "1.2" ;;
+            2) echo "1.5" ;;
+            3) echo "2.0" ;;
+            4) echo "2.6" ;;
+            *) echo "unknown" ;;
+        esac
     elif echo "$lower" | grep -qiE 'mini'; then
         echo "1.5"
     elif echo "$lower" | grep -qiE 'tiny'; then
         echo "0.8"
     else
-        echo "2.6"  # default to 4B estimate
+        echo "unknown"
     fi
 }
 
@@ -75,9 +88,10 @@ KV_PER_1K="0.05"
 DEFAULT_CONTEXT="8192"
 
 # --- Check candidates exist ---
+: > "$QUALIFYING"
 candidate_count=$(yq -r '.candidates | length' "$SPEC_FILE" 2>/dev/null || echo "0")
 if [[ "$candidate_count" == "0" || "$candidate_count" == "null" ]]; then
-    log_warn "No candidates in specs.yaml. Run 01-discover.sh first."
+    log_warn "No candidates in specs.yaml. Run 02-discover.sh first."
     exit 0
 fi
 
@@ -85,30 +99,41 @@ fi
 qualifying_count=0
 excluded_count=0
 
-: > "$QUALIFYING"
-
 i=0
 while (( i < candidate_count )); do
     tag=$(yq -r ".candidates[$i].tag" "$SPEC_FILE")
     priority=$(yq -r ".candidates[$i].priority // \"medium\"" "$SPEC_FILE")
     source=$(yq -r ".candidates[$i].source // \"unknown\"" "$SPEC_FILE")
+    configured_vram=$(yq -r ".candidates[$i].estimated_vram_gb // \"null\"" "$SPEC_FILE")
+    retest=$(yq -r ".candidates[$i].retest // false" "$SPEC_FILE")
 
     # Skip if already in models (curated)
-    if yq -r '.models[].tag' "$SPEC_FILE" 2>/dev/null | grep -qxF "$tag"; then
+    if [[ "$retest" != true ]] && yq -r '.models[].tag' "$SPEC_FILE" 2>/dev/null | grep -qxF "$tag"; then
         log_info "SKIP (already curated): $tag"
         (( i++ )) || true
         continue
     fi
 
     # Skip if already in rejected
-    if yq -r '.rejected[].tag' "$SPEC_FILE" 2>/dev/null | grep -qxF "$tag"; then
+    if [[ "$retest" != true ]] && yq -r '.rejected[].tag' "$SPEC_FILE" 2>/dev/null | grep -qxF "$tag"; then
         log_info "SKIP (already rejected): $tag"
         (( i++ )) || true
         continue
     fi
 
-    # Estimate VRAM
-    vram_est=$(estimate_vram "$tag")
+    # Prefer a verified artifact-size estimate supplied during discovery. Fall
+    # back to a name heuristic only for recognizable model sizes.
+    if [[ "$configured_vram" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v v="$configured_vram" 'BEGIN {exit !(v > 0)}'; then
+        vram_est="$configured_vram"
+    else
+        vram_est=$(estimate_vram "$tag")
+    fi
+    if [[ "$vram_est" == "unknown" ]]; then
+        log_warn "EXCLUDE: $tag (no VRAM estimate; add estimated_vram_gb from model metadata)"
+        (( excluded_count++ )) || true
+        (( i++ )) || true
+        continue
+    fi
     kv_cache=$(awk -v k="$KV_PER_1K" -v c="$DEFAULT_CONTEXT" 'BEGIN { printf "%.2f", (c/1000)*k }')
     total=$(awk -v v="$vram_est" -v k="$kv_cache" 'BEGIN { printf "%.2f", v+k }')
 
