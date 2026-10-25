@@ -19,7 +19,8 @@ else
 fi
 log_info()  { printf "${CYAN}[*]${NC} %s\n" "$*"; }
 log_ok()    { printf "${GREEN}[+]${NC} %s\n" "$*"; }
-log_warn()  { printf "${YELLOW}[!]${NC} %s\n" "$*"; }
+# detect_gpu returns its hardware record on stdout; diagnostics must not join it.
+log_warn()  { printf "${YELLOW}[!]${NC} %s\n" "$*" >&2; }
 log_err()   { printf "${RED}[-]${NC} %s\n" "$*" >&2; }
 die() { log_err "$*"; exit 1; }
 

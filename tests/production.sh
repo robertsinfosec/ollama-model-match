@@ -274,6 +274,45 @@ test_human_prompts_and_agent_privileges_with_a_terminal() {
     pass "human yes/no prompts and agent noninteractive sudo work with a terminal"
 }
 
+test_amd_fallback_warnings_do_not_corrupt_hardware_record() {
+    local workspace backend ram expected tool
+    for backend in amd-smi rocm-smi; do
+        for ram in 123 32; do
+            workspace=$(make_workspace "amd-fallback-${backend}-${ram}")
+            prepare_prereq_workspace "$workspace"
+            # Isolated PATH: neither the host GPU tools nor host RAM readings
+            # can affect this missing-VRAM regression fixture.
+            for tool in awk sed tr cut cp mv echo; do
+                ln -s "$(type -P "$tool")" "${workspace}/bin/${tool}"
+            done
+            cat > "${workspace}/bin/${backend}" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+    --showproductname) printf 'Card series: Radeon 8060S\n' ;;
+    --showmeminfo|--showdriverversion) exit 0 ;;
+    *) printf 'GPU: Radeon 8060S\n' ;;
+esac
+SH
+            cat > "${workspace}/bin/free" <<'SH'
+#!/usr/bin/env bash
+printf 'Mem: %s 0 0 0 0 0\n' "${TEST_RAM_GB:?}"
+SH
+            chmod +x "${workspace}/bin/${backend}" "${workspace}/bin/free"
+            if ! PATH="${workspace}/bin" TEST_RAM_GB="$ram" bash "${workspace}/src/01-assess.sh" > "${workspace}/stdout.log" 2> "${workspace}/stderr.log"; then
+                cat "${workspace}/stderr.log" >&2
+                fail "${backend} missing-VRAM fallback failed with ${ram}GB RAM"
+            fi
+            expected=8
+            [[ "$ram" -le 64 ]] || expected="$ram"
+            TEST_VRAM="$expected" yq -e '.hardware.gpu_vendor == "amd" and .hardware.gpu_vram_gb == env(TEST_VRAM) and .hardware.gpu_name != ""' "${workspace}/src/specs.yaml" >/dev/null || fail "AMD fallback hardware record was corrupted"
+            grep -q 'AMD GPU detected but VRAM not reported' "${workspace}/stderr.log" || fail "AMD fallback warning was lost"
+            ! grep -q 'AMD GPU detected but VRAM not reported' "${workspace}/stdout.log" || fail "AMD fallback warning leaked into machine-readable stdout"
+            pass "${backend} missing-VRAM fallback preserves hardware data (${ram}GB RAM)"
+        done
+    done
+}
+
+test_amd_fallback_warnings_do_not_corrupt_hardware_record
 test_filter_requires_explicit_retest_for_known_models
 test_large_parameter_names_do_not_match_small_suffixes
 test_offloaded_models_cannot_reach_review
