@@ -77,7 +77,7 @@ jobs:
             ## ollama-model-match ${{ steps.version.outputs.version }}
 
             ### Contents
-            - `00-prereqs.sh` through `08-update.sh` (pipeline scripts)
+            - `00-prereqs.sh` through `10-run-unattended.sh` (pipeline scripts)
             - `README.md` (full instruction manual)
             - `.opencode/skills/`, `.claude/skills/`, `.github/skills/` (skill definitions)
 

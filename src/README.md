@@ -3,6 +3,31 @@
 You are an LLM running in an OpenCode session with access to the local filesystem.
 This README is your instruction manual. Follow the steps in order. Do not skip steps.
 
+## Agent Operating Contract
+
+You are the pipeline operator, not its maintainer. **Use the repository scripts
+as-is. Do not edit, replace, bypass, or create alternate versions of pipeline
+scripts, skills, workflows, or evaluation prompts while executing this workflow.**
+The only runtime state you may update is `specs.yaml`, and only where a documented
+pipeline step requires LLM judgment (OSINT candidates and Step 07 promotion).
+
+Continue automatically through every successful step. Do not ask the user to
+re-run commands, confirm normal progress, or re-initiate the workflow after an
+expected long-running operation. The user's goal is end-to-end completion.
+
+If a script, prerequisite, model pull, benchmark, evaluation, or verification
+fails unexpectedly, stop the pipeline and give the human-in-the-loop (HITL) a
+concise incident report containing:
+
+- pipeline step and exact command;
+- exit code and relevant error output;
+- expected versus actual behavior;
+- current checkpoint (`specs.yaml`, `results/unattended-status.txt`, and any
+  relevant result file); and
+- a recommended next action.
+
+Do not modify repository code as a workaround. Wait for HITL direction.
+
 ## Prerequisites (User)
 
 The user has:
@@ -29,7 +54,7 @@ Long-running steps require explicit timeout. **Always set the timeout parameter.
 | 05-benchmark | 300000 | 1-2 min per model |
 | 06-evaluate | 600000 | 3 prompts per model, thinking models are slow |
 | 07-report | 10000 | Local aggregation |
-| 08-update | 300000 | Single model rebuild |
+| 09-update | 300000 | Single model rebuild |
 
 **Important:** Default 120000ms is too short for pulls and benchmarks. Partial downloads resume automatically if interrupted.
 
@@ -46,7 +71,9 @@ Long-running steps require explicit timeout. **Always set the timeout parameter.
 | `05-benchmark.sh` | Warmup + benchmark, capture tok/s + output |
 | `06-evaluate.sh` | Run standardized eval prompts, capture outputs |
 | `07-report.sh` | Generate markdown report |
-| `08-update.sh` | Rebuild single model alias with updated config |
+| `09-update.sh` | Rebuild single model alias with updated config |
+| `10-run-unattended.sh` | Durable runner for deterministic Steps 03–06 |
+| `lib/ollama.sh` | Shared native/Docker Ollama detection and command helpers |
 
 ## Steps
 
@@ -93,13 +120,33 @@ Creates `specs.yaml` if it doesn't exist, or updates the hardware section if it 
 
 #### Part 1: OSINT Recon (LLM web search)
 
-Use your `websearch` tool to find recent breakthroughs in small self-hostable models.
-Run these queries:
+Use your `websearch` tool to find recent, self-hostable models **and ensure the
+candidate pool covers the friendly roles assigned in Step 07**. Read the current
+hardware and VRAM budget from `specs.yaml`; only retain role candidates that can
+reasonably fit that budget with 100% GPU inference.
+
+Run these general-discovery queries:
 
 1. "new small language model 2026 self-hosted ollama"
 2. "mixture of experts breakthrough small model local"
 3. "new open weight model 3b 4b coding reasoning"
 4. "best small llm ollama 2026"
+
+Then run role-targeted queries for each applicable role. Do not assume a general
+model can fill a specialized role: search specifically for `code`, `thinking`,
+`cyber`, and `uncensored` models. Include the current VRAM budget in each query
+and use the current year, for example:
+
+1. "best small coding model GGUF Ollama <year> <VRAM>GB"
+2. "best small reasoning thinking model GGUF Ollama <year> <VRAM>GB"
+3. "best small cybersecurity cyber security model GGUF Ollama <year> <VRAM>GB"
+4. "best small uncensored model GGUF Ollama <year> <VRAM>GB"
+
+Also consider `fast`, `default`, and `frontier`: use small models for `fast`,
+and, where the hardware permits, prefer stronger/larger models for `default` and
+`frontier`. It is acceptable for roles to share a model on constrained hardware,
+but discovery must give `cyber` and `uncensored` a deliberate opportunity to
+qualify rather than leaving them `null` by default.
 
 For each result, extract:
 - Model name and organization
@@ -108,7 +155,8 @@ For each result, extract:
 - Whether it's available on HuggingFace or Ollama
 
 **Decision:** If you find a model that is:
-- 2B-4B parameters (or MoE with similar active params)
+- Within the parameter/quantization range that fits the current VRAM budget (or
+  an MoE with similar active parameters)
 - Available on HuggingFace or Ollama
 - Not already in `specs.yaml` (check `models:`, `rejected:`, `candidates:`)
 
@@ -116,10 +164,19 @@ Then append it to `specs.yaml` under `candidates:` with:
 ```yaml
 - tag: <model-tag>
   source: osint
+  target_roles: [cyber] # one or more of: fast, default, code, thinking, frontier, cyber, uncensored
+  estimated_vram_gb: <quantized model size in GB, excluding KV cache>
   priority: high
   discovered: <today>
   status: new
 ```
+
+Set `target_roles` to the role(s) supported by the model's published purpose or
+reliable community evidence. Do not label a model `cyber` or `uncensored` based
+only on an unverified model name. When model metadata provides an artifact or
+quantized-file size, record it as `estimated_vram_gb`. Candidates with neither
+that value nor a recognizable parameter count are excluded rather than guessed
+to fit.
 
 #### Part 2: Public Source Discovery (bash)
 
@@ -190,6 +247,21 @@ Each model takes 1-3 minutes. Re-running skips already-pulled models.
 **Output:** `results/pull-status.txt`
 
 **Important:** Do NOT set timeout below 120000ms. Partial downloads resume automatically.
+
+### Unattended deterministic run (Steps 03–06)
+
+After completing the Step 02 OSINT review, prefer the unattended runner when
+multiple models will be pulled, benchmarked, or evaluated:
+
+```bash
+nohup bash 10-run-unattended.sh > results/unattended.log 2>&1 &
+echo $! > results/unattended.pid
+```
+
+Do not ask the user to monitor this job. Inspect `results/unattended-status.txt`
+and `results/unattended.log` when the process completes. If the status is
+`COMPLETE`, continue directly to Step 07. If it is `FAILED`, stop and provide the
+HITL incident report described above; do not patch scripts or silently retry.
 
 ---
 
@@ -263,10 +335,13 @@ Review all benchmark and evaluation results. For each qualifying model:
 
 1. **If score >= 12/15 AND tok/s >= min_tok_per_sec:**
    - Promote to `models:` section in `specs.yaml`
-   - Set `status: active`
-   - Record `measured_tok_per_sec` and `tested_date`
-   - Add notes about strengths/weaknesses
-   - Assign roles (see Role Assignment Guidelines below)
+    - Set `status: active`
+    - Record `measured_tok_per_sec` and `tested_date`
+    - Add notes about strengths/weaknesses
+    - Assign roles (see Role Assignment Guidelines below). Treat a candidate's
+      `target_roles` as discovery evidence, then confirm the assignment from
+      benchmark and evaluation results before adding it to the model's `roles:`
+      list and the top-level `roles:` mapping.
 
 2. **If score < 12/15 OR tok/s < min_tok_per_sec:**
    - Move to `rejected:` section in `specs.yaml`
@@ -334,7 +409,7 @@ Skips roles set to `null`.
 **Script:** `09-update.sh`
 
 ```bash
-bash 08-update.sh <alias>
+bash 09-update.sh <alias>
 ```
 
 Rebuilds a single model alias with current `specs.yaml` config. Useful for:
@@ -353,8 +428,8 @@ Rebuilds a single model alias with current `specs.yaml` config. Useful for:
 
 **Example:**
 ```bash
-# Edit specs.yaml: change code model context to 32768
-bash 08-update.sh code
+# Edit specs.yaml: change code model num_ctx to 32768
+bash 09-update.sh code
 ```
 
 ## GPU Support Matrix

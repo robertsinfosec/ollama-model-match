@@ -33,6 +33,7 @@ die() { log_err "$*"; exit 1; }
 # --- Hardware specs ---
 gpu_vram=$(yq -r '.hardware.gpu_vram_gb' "$SPEC_FILE")
 gpu_vendor=$(yq -r '.hardware.gpu_vendor // "none"' "$SPEC_FILE")
+vram_headroom=$(yq -r '.thresholds.vram_headroom_gb // 1.0' "$SPEC_FILE")
 
 if [[ "$gpu_vram" == "0" || "$gpu_vendor" == "none" || "$gpu_vendor" == "snapdragon" ]]; then
     log_warn "No usable GPU detected (CPU-only mode)."
@@ -40,9 +41,9 @@ if [[ "$gpu_vram" == "0" || "$gpu_vendor" == "none" || "$gpu_vendor" == "snapdra
     log_info ""
     vram_budget="999"  # Pass everything
 else
-    vram_budget=$(awk -v v="$gpu_vram" 'BEGIN { printf "%.1f", v - 1.0 }')
+    vram_budget=$(awk -v v="$gpu_vram" -v h="$vram_headroom" 'BEGIN { printf "%.1f", v - h }')
     log_info "Filtering candidates by VRAM budget"
-    log_info "GPU: ${gpu_vram}GB | Budget: ${vram_budget}GB (1.0GB headroom)"
+    log_info "GPU: ${gpu_vram}GB | Budget: ${vram_budget}GB (${vram_headroom}GB headroom)"
     log_info ""
 fi
 
@@ -66,7 +67,7 @@ estimate_vram() {
     elif echo "$lower" | grep -qiE 'tiny'; then
         echo "0.8"
     else
-        echo "2.6"  # default to 4B estimate
+        echo "unknown"
     fi
 }
 
@@ -77,7 +78,7 @@ DEFAULT_CONTEXT="8192"
 # --- Check candidates exist ---
 candidate_count=$(yq -r '.candidates | length' "$SPEC_FILE" 2>/dev/null || echo "0")
 if [[ "$candidate_count" == "0" || "$candidate_count" == "null" ]]; then
-    log_warn "No candidates in specs.yaml. Run 01-discover.sh first."
+    log_warn "No candidates in specs.yaml. Run 02-discover.sh first."
     exit 0
 fi
 
@@ -92,6 +93,7 @@ while (( i < candidate_count )); do
     tag=$(yq -r ".candidates[$i].tag" "$SPEC_FILE")
     priority=$(yq -r ".candidates[$i].priority // \"medium\"" "$SPEC_FILE")
     source=$(yq -r ".candidates[$i].source // \"unknown\"" "$SPEC_FILE")
+    configured_vram=$(yq -r ".candidates[$i].estimated_vram_gb // \"null\"" "$SPEC_FILE")
 
     # Skip if already in models (curated)
     if yq -r '.models[].tag' "$SPEC_FILE" 2>/dev/null | grep -qxF "$tag"; then
@@ -107,8 +109,19 @@ while (( i < candidate_count )); do
         continue
     fi
 
-    # Estimate VRAM
-    vram_est=$(estimate_vram "$tag")
+    # Prefer a verified artifact-size estimate supplied during discovery. Fall
+    # back to a name heuristic only for recognizable model sizes.
+    if [[ "$configured_vram" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        vram_est="$configured_vram"
+    else
+        vram_est=$(estimate_vram "$tag")
+    fi
+    if [[ "$vram_est" == "unknown" ]]; then
+        log_warn "EXCLUDE: $tag (no VRAM estimate; add estimated_vram_gb from model metadata)"
+        (( excluded_count++ )) || true
+        (( i++ )) || true
+        continue
+    fi
     kv_cache=$(awk -v k="$KV_PER_1K" -v c="$DEFAULT_CONTEXT" 'BEGIN { printf "%.2f", (c/1000)*k }')
     total=$(awk -v v="$vram_est" -v k="$kv_cache" 'BEGIN { printf "%.2f", v+k }')
 

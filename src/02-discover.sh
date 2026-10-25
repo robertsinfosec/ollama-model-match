@@ -29,7 +29,8 @@ die() { log_err "$*"; exit 1; }
 
 # --- Read hardware specs ---
 gpu_vram=$(yq -r '.hardware.gpu_vram_gb' "$SPEC_FILE")
-vram_budget=$(awk -v v="$gpu_vram" 'BEGIN { printf "%.0f", v - 1.0 }')
+vram_headroom=$(yq -r '.thresholds.vram_headroom_gb // 1.0' "$SPEC_FILE")
+vram_budget=$(awk -v v="$gpu_vram" -v h="$vram_headroom" 'BEGIN { printf "%.0f", v - h }')
 
 # --- Calculate size tiers based on VRAM budget ---
 # Always include small models (1B-3B) for "fast" role.
@@ -84,6 +85,7 @@ SIZE_PATTERN=$(build_size_pattern "$vram_budget")
 EXCLUDE_PATTERN=$(build_exclude_pattern "$vram_budget")
 
 log_info "Polling sources for models fitting ${vram_budget}GB VRAM budget"
+log_info "Reserved headroom: ${vram_headroom}GB"
 log_info "Size tiers: $SIZE_PATTERN"
 log_info ""
 
@@ -139,38 +141,47 @@ today=$(date +%Y-%m-%d)
 
 # --- Source 1: Ollama library ---
 log_info "Polling Ollama library..."
-curl -s https://ollama.com/library 2>/dev/null | \
-    grep -oP 'href="/library/\K[^"]+' | sort -u | \
+if library_html=$(curl -fsSL --max-time 30 https://ollama.com/library 2>/dev/null); then
     while read -r name; do
+        [[ -n "$name" ]] || continue
         echo "$name" | grep -qiE "$EXCLUDE_PATTERN" && continue
         echo "$name" | grep -qiE "$SIZE_PATTERN" || continue
         echo "ollama||$name" >> "$tmpfile"
-    done
+    done < <(printf '%s\n' "$library_html" | grep -oP 'href="/library/\K[^"]+' | sort -u || true)
+else
+    log_warn "Could not retrieve the Ollama library; continuing with other sources."
+fi
 
 # --- Source 2: HuggingFace orgs (smaller labs) ---
 log_info "Polling HuggingFace orgs..."
 ORGS="deepseek-ai Qwen THUDM MiniMaxAI mistralai"
 for org in $ORGS; do
-    curl -s "https://huggingface.co/api/models?author=${org}&search=gguf&limit=15" 2>/dev/null | \
-        jq -r '.[].modelId // empty' 2>/dev/null | \
+    if models_json=$(curl -fsSL --max-time 30 "https://huggingface.co/api/models?author=${org}&search=gguf&limit=15" 2>/dev/null); then
         while read -r model; do
+            [[ -n "$model" ]] || continue
             name=$(echo "$model" | sed 's|.*/||')
             echo "$name" | grep -qiE "$EXCLUDE_PATTERN" && continue
             echo "$name" | grep -qiE "$SIZE_PATTERN" || continue
             echo "hf|$org|$model" >> "$tmpfile"
-        done
+        done < <(printf '%s\n' "$models_json" | jq -r '.[].modelId // empty' 2>/dev/null || true)
+    else
+        log_warn "Could not retrieve HuggingFace models for ${org}; continuing."
+    fi
 done
 
 # --- Source 3: HuggingFace recent GGUFs (limited) ---
 log_info "Polling HuggingFace recent GGUFs..."
-curl -s "https://huggingface.co/api/models?search=gguf&sort=createdAt&limit=30" 2>/dev/null | \
-    jq -r '.[] | select(.tags // [] | contains(["gguf"])) | .modelId' 2>/dev/null | \
+if recent_json=$(curl -fsSL --max-time 30 "https://huggingface.co/api/models?search=gguf&sort=createdAt&limit=30" 2>/dev/null); then
     while read -r model; do
+        [[ -n "$model" ]] || continue
         name=$(echo "$model" | sed 's|.*/||')
         echo "$name" | grep -qiE "$EXCLUDE_PATTERN" && continue
         echo "$name" | grep -qiE "$SIZE_PATTERN" || continue
         echo "hf-trending||$model" >> "$tmpfile"
-    done
+    done < <(printf '%s\n' "$recent_json" | jq -r '.[] | select(.tags // [] | contains(["gguf"])) | .modelId' 2>/dev/null || true)
+else
+    log_warn "Could not retrieve recent HuggingFace GGUFs; continuing."
+fi
 
 # --- Filter known and deduplicate ---
 log_info "Filtering known models and scoring priority..."

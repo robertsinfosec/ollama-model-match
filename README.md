@@ -101,8 +101,10 @@ ollama-model-match/
 ├── src/
 │   ├── README.md                # Full instruction manual for LLMs
 │   ├── specs.yaml               # Single source of truth (generated)
-│   ├── 00-prereqs.sh ... 08-update.sh  # Pipeline scripts
+│   ├── 00-prereqs.sh ... 10-run-unattended.sh  # Pipeline scripts
+│   ├── lib/ollama.sh             # Shared Ollama backend helpers
 │   └── results/                 # Generated at runtime (gitignored)
+├── tests/run.sh                  # Behavioral test harness
 ├── .opencode/skills/...         # OpenCode skill
 ├── .claude/skills/...           # Claude Code skill
 ├── .github/skills/...           # GitHub Copilot skill

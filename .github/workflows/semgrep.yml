@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Run Semgrep
-        run: semgrep scan --config auto --sarif --output results.sarif src/ || true
+        run: semgrep scan --config auto --sarif --output results.sarif src/
 
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4

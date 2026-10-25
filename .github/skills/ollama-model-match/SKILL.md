@@ -9,13 +9,27 @@ Follow these steps in order. Full details are in `src/README.md`.
 
 1. **Prereqs**: Run `src/00-prereqs.sh` — checks tools, finds Ollama (native/Docker).
 2. **Assess**: Run `src/01-assess.sh` — detects GPU (NVIDIA/AMD/Intel/Apple/Snapdragon), RAM, CPU, OS. Creates `specs.yaml`.
-3. **Discovery**: Use `websearch` for OSINT recon (new small models), then run `src/02-discover.sh`.
+3. **Discovery**: Use `websearch` for general and role-targeted OSINT recon, then run `src/02-discover.sh`. Search for VRAM-fitting candidates for `code`, `thinking`, `cyber`, and `uncensored` in addition to general/fast models; record supported roles in `target_roles`.
 4. **Filter**: Run `src/03-filter.sh` — filters candidates by VRAM budget (100% GPU only).
 5. **Pull**: Run `src/04-pull.sh` — pull qualifying models one at a time. Use `src/04-pull.sh <alias>` for single model.
 6. **Benchmark**: Run `src/05-benchmark.sh` — warmup + benchmark each model. Use `src/05-benchmark.sh <alias>` for single model.
 7. **Evaluate**: Run `src/06-evaluate.sh` — 3 standardized prompts per model. Use `src/06-evaluate.sh <alias>` for single model.
 8. **Score & Promote**: Read benchmark + eval results. Score each model 1-5 (pass: 12/15). Promote winners to `models:` in `specs.yaml`, reject losers to `rejected:`.
 9. **Report**: Run `src/07-report.sh | glow`.
+
+## Agent Operating Rules
+
+- Execute the pipeline scripts as-is. Never rewrite, patch, bypass, or create an
+  alternate pipeline implementation while running a user assessment.
+- Continue through successful steps without asking the user to re-initiate,
+  confirm routine progress, or manually run commands.
+- For multi-model work after Step 02, run `src/10-run-unattended.sh` with `nohup`;
+  inspect `src/results/unattended-status.txt` and continue to Step 07 when it
+  completes.
+- On any unexpected script, pull, benchmark, evaluation, or verification failure,
+  stop and give the HITL the step, exact command, exit code, relevant output,
+  checkpoint files, expected versus actual behavior, and a recommended next step.
+  Do not change repository code as a workaround.
 
 ## Key Rules
 
@@ -35,7 +49,7 @@ Follow these steps in order. Full details are in `src/README.md`.
 
 ## Guardrails
 
-- `08-update.sh <alias>` rebuilds a single model with updated config from specs.yaml
+- `09-update.sh <alias>` rebuilds a single model with updated config from specs.yaml
 - Validates context (positive integer), thinking (true/false), thinking_effort (low/medium/high/null)
 - Warns if thinking requested (may not be supported by model)
 - Warns if context > 131072 (may cause OOM)

@@ -32,42 +32,10 @@ die() { log_err "$*"; exit 1; }
 
 [[ -f "$SPEC_FILE" ]] || die "specs.yaml not found."
 
-# --- Ollama backend detection ---
-OLLAMA_BACKEND=""
-OLLAMA_CONTAINER="${OLLAMA_CONTAINER:-}"
-detect_ollama() {
-    if command -v docker >/dev/null 2>&1; then
-        local containers id name image service
-        if containers="$(docker ps --no-trunc --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Label "com.docker.compose.service"}}' 2>/dev/null)"; then
-            while IFS='|' read -r id name image service; do
-                [[ -n "$id" ]] || continue
-                if [[ -n "$OLLAMA_CONTAINER" ]]; then
-                    [[ "$name" == "$OLLAMA_CONTAINER" || "$id" == "$OLLAMA_CONTAINER" ]] || continue
-                elif [[ "${name,,}" != *ollama* && "${service,,}" != *ollama* ]] && [[ ! "$image" =~ (^|/)ollama/ollama([:@]|$) ]]; then
-                    continue
-                fi
-                docker exec "$id" sh -c 'command -v ollama >/dev/null 2>&1' >/dev/null 2>&1 || continue
-                OLLAMA_BACKEND=docker; OLLAMA_CONTAINER="$id"
-                return 0
-            done <<<"$containers"
-        fi
-    fi
-    if [[ -n "$(type -P ollama)" ]]; then
-        OLLAMA_BACKEND=native
-    else
-        die "No Ollama found."
-    fi
-}
+# shellcheck source=lib/ollama.sh
+source "${SCRIPT_DIR}/lib/ollama.sh"
 
-ollama() {
-    if [[ "$OLLAMA_BACKEND" == "docker" ]]; then
-        docker exec "$OLLAMA_CONTAINER" ollama "$@"
-    else
-        command ollama "$@"
-    fi
-}
-
-detect_ollama
+detect_ollama || die "No Ollama found."
 ollama ls >/dev/null || die "Cannot connect to Ollama."
 
 # --- Read a model's config from specs.yaml ---
@@ -80,7 +48,7 @@ get_model_config() {
         found=$(yq -r ".models[$i].alias" "$SPEC_FILE")
         if [[ "$found" == "$model_alias" ]]; then
             yq -r ".models[$i].tag" "$SPEC_FILE"
-            yq -r ".models[$i].context // 8192" "$SPEC_FILE"
+            yq -r ".models[$i].num_ctx // .models[$i].context // 8192" "$SPEC_FILE"
             yq -r ".models[$i].thinking // false" "$SPEC_FILE"
             yq -r ".models[$i].thinking_effort // null" "$SPEC_FILE"
             return 0
@@ -118,7 +86,7 @@ create_role_alias() {
         target="$tag"
     fi
 
-    if ! ollama ls 2>/dev/null | grep -q "$target"; then
+    if ! ollama show "$target" >/dev/null 2>&1; then
         log_info "    Pulling $target..."
         if ! ollama pull "$target" >/dev/null 2>&1; then
             log_err "    Failed to pull $target"
