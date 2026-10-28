@@ -129,7 +129,7 @@ for line in "${models_to_bench[@]}"; do
     # Extract metrics
     eval_rate=$(grep -oP 'eval rate:\s*\K[0-9.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
     prompt_rate=$(grep -oP 'prompt eval rate:\s*\K[0-9.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
-    eval_count=$(grep -oP 'eval count:\s*\K[0-9]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
+    eval_count=$(grep -oP '^eval count:\s*\K[0-9]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
     total_dur=$(grep -oP 'total duration:\s*\K[0-9a-z.]+' "$outfile" 2>/dev/null | head -1 || echo "N/A")
 
     if [[ "$eval_rate" != "N/A" ]]; then
