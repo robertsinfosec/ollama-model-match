@@ -95,3 +95,6 @@ $RECYCLE.BIN/
 src/specs.yaml
 src/results/
 .tools/
+
+# Python tools
+__pycache__/

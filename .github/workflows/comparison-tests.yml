@@ -1,0 +1,25 @@
+name: Python Comparison Tests
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install isolated executor
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+      - name: Compile Python entrypoints
+        run: python3 -m compileall -q src tests
+      - name: Run offline and local-server tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v

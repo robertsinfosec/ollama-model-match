@@ -1,0 +1,98 @@
+{
+  "version": "practical-v1.1",
+  "description": "Small, objective local-assistant evaluation. Not a general intelligence benchmark.",
+  "tasks": [
+    {
+      "id": "unique-records", "category": "coding", "kind": "python", "function": "unique_by_id",
+      "prompt": "Write Python 3 function unique_by_id(records: list[dict]) -> list[dict]. Every record has a string 'id'. Keep the LAST record for each id, but order the result by each id's FIRST appearance. Do not mutate the input. Handle an empty list. Return only Python code, without examples or explanation. Standard library only.",
+      "cases": [
+        {"args": [[]], "expected": []},
+        {"args": [[{"id":"a","v":1},{"id":"b","v":2},{"id":"a","v":3}]], "expected":[{"id":"a","v":3},{"id":"b","v":2}]},
+        {"args": [[{"id":"z","v":0},{"id":"a","v":1},{"id":"z","v":2},{"id":"b","v":3},{"id":"a","v":4}]], "expected":[{"id":"z","v":2},{"id":"a","v":4},{"id":"b","v":3}]}
+      ]
+    },
+    {
+      "id":"merge-intervals", "category":"coding", "kind":"python", "function":"merge_intervals",
+      "prompt":"Write Python 3 function merge_intervals(intervals: list[list[int]]) -> list[list[int]]. Return intervals sorted by start, merging overlapping OR touching closed intervals. Each input interval has exactly two integers. Raise ValueError if any start is greater than its end. Do not mutate input, including its nested lists. Empty input returns []. Return only code, without examples or explanation. Standard library only.",
+      "cases":[
+        {"args":[[]],"expected":[]},
+        {"args":[[[5,7],[1,3],[3,5],[10,11]]],"expected":[[1,7],[10,11]]},
+        {"args":[[[1,10],[2,3],[10,10]]],"expected":[[1,10]]},
+        {"args":[[[3,1]]],"raises":"ValueError"},
+        {"args":[[[-3,-1],[-1,2],[5,5]]],"expected":[[-3,2],[5,5]]}
+      ]
+    },
+    {
+      "id":"parse-ports", "category":"coding", "kind":"python", "function":"parse_ports",
+      "prompt":"Write Python 3 function parse_ports(text: str) -> list[int]. Parse comma-separated decimal ports or inclusive ranges such as '80, 443, 8000-8002'. Allow whitespace around tokens and range endpoints; ignore empty comma-separated entries. Deduplicate while preserving first appearance. Ports must be between 1 and 65535 inclusive. Raise ValueError for malformed tokens, descending ranges, or out-of-range values. Empty/whitespace input returns []. Return only code, no examples or explanation. Standard library only.",
+      "cases":[
+        {"args":["80,443,80,8000-8002,8001"],"expected":[80,443,8000,8001,8002]},
+        {"args":[" , 3 - 5 ,, 1, 4 "],"expected":[3,4,5,1]},
+        {"args":[""],"expected":[]},
+        {"args":["65535"],"expected":[65535]},
+        {"args":["0"],"raises":"ValueError"},
+        {"args":["65536"],"raises":"ValueError"},
+        {"args":["5-3"],"raises":"ValueError"},
+        {"args":["ssh"],"raises":"ValueError"},
+        {"args":["1-2-3"],"raises":"ValueError"}
+      ]
+    },
+    {
+      "id":"moving-average", "category":"coding", "kind":"python", "function":"moving_average",
+      "prompt":"Write Python 3 function moving_average(values: list[float], window: int) -> list[float]. Return the arithmetic mean of each FULL consecutive window, moving one position at a time. If window exceeds input length, return []. Raise ValueError when window <= 0, even on empty input. Do not mutate input. Return only code, without examples or explanation. Standard library only.",
+      "cases":[
+        {"args":[[1,2,3,4],2],"expected":[1.5,2.5,3.5]},
+        {"args":[[],1],"expected":[]},
+        {"args":[[1,2],3],"expected":[]},
+        {"args":[[],0],"raises":"ValueError"},
+        {"args":[[1],-1],"raises":"ValueError"},
+        {"args":[[-2,0,2],1],"expected":[-2,0,2]}
+      ]
+    },
+    {
+      "id":"csv-adults", "category":"coding", "kind":"python", "function":"adult_names",
+      "prompt":"Write Python 3 function adult_names(csv_text: str) -> list[str]. Input is CSV with a header containing name,age,country. Use CSV quoting rules (names may contain commas). Return names of rows with country exactly US and integer age >= 18, preserving row order. Strip surrounding whitespace from country and age. Skip rows with blank/malformed age or missing fields. An empty string returns []. Do not modify names. Return only code, without examples or explanation. Standard library only.",
+      "cases":[
+        {"args":["name,age,country\nAlice,18,US\nBob,17,US\nCarol,30,CA\n"],"expected":["Alice"]},
+        {"args":["name,age,country\n\"Lee, Dana\", 21 , US \nBad,nope,US\nMissing,,US\nShort\n"],"expected":["Lee, Dana"]},
+        {"args":[""],"expected":[]},
+        {"args":["name,age,country\nZ,80,US\nY,18,US\n"],"expected":["Z","Y"]}
+      ]
+    },
+    {
+      "id":"ticket-extraction", "category":"instructions", "kind":"json", "response_schema": {"type": "object"},
+      "prompt":"Extract only facts explicitly present. Return one JSON object with exactly these keys: ticket_id, owner, account, severity. Use JSON null for missing facts; preserve account leading zeroes as a string. No explanation. Source: Ticket T-104 was opened by Dana Lee for account 00741. Investigation is pending. No severity has been assigned.",
+      "expected":{"ticket_id":"T-104","owner":"Dana Lee","account":"00741","severity":null}
+    },
+    {
+      "id":"ticket-routing", "category":"instructions", "kind":"json", "response_schema": {"type": "array", "items": {}},
+      "prompt":"Classify the following messages using ONLY these rules, in priority order: any message mentioning a charge, refund or invoice -> billing; otherwise any message mentioning login or password -> access; otherwise -> other. Match words case-insensitively. Return only a JSON array of labels in message order. Messages: 1. 'LOGIN fails and my INVOICE is wrong' 2. 'Please reset my password' 3. 'I love this tool' 4. 'Where is my refund?' 5. 'How can I change the theme?'",
+      "expected":["billing","access","other","billing","other"]
+    },
+    {
+      "id":"exact-format", "category":"instructions", "kind":"exact",
+      "prompt":"Return exactly three lines and nothing else. For the pairs alpha=1, beta=2, gamma=3, double each number and write name|number. Preserve this order. No headings, bullets, Markdown fences or spaces.",
+      "expected":"alpha|2\nbeta|4\ngamma|6"
+    },
+    {
+      "id":"grounded-action", "category":"instructions", "kind":"json", "response_schema": {"type": "object"},
+      "prompt":"Read the note and return ONLY a JSON object with exactly the keys action, owner, deadline. Copy the exact action and owner strings from the note. Use null for information not stated. Do not infer deadlines from meeting dates. Note: On Monday the team discussed the outage. Action: rotate the API key. Owner: Morgan. The next meeting is Friday, but no deadline for the action was agreed.",
+      "expected":{"action":"rotate the API key","owner":"Morgan","deadline":null}
+    },
+    {
+      "id":"work-rates", "category":"reasoning", "kind":"json", "response_schema": {"type": "object"},
+      "prompt":"A worker A can finish a job in 6 hours, B in 12 hours, and C in 4 hours. A and B start together. After 1 hour, C joins them. Everyone continues at a constant rate. How many hours from the original start until the job is finished? Return only JSON with exactly the key hours and a numeric value.",
+      "expected":{"hours":2.5}
+    },
+    {
+      "id":"price-calculation", "category":"reasoning", "kind":"json", "response_schema": {"type": "object"},
+      "prompt":"An item costs $80 before discounts and tax. Apply a 10% discount first, then an 8% sales tax to the discounted price. What is the final price? Return only JSON with exactly the key price and a numeric value in dollars.",
+      "expected":{"price":77.76}
+    },
+    {
+      "id":"dependency-schedule", "category":"reasoning", "kind":"json", "response_schema": {"type": "object"},
+      "prompt":"Tasks run with unlimited workers and no overhead. A takes 2 hours and starts at hour 0. B takes 3 hours and can start only after A. C takes 4 hours and can start only after A. D takes 1 hour and can start only after BOTH B and C finish. At what hour can D finish earliest? Return only JSON with exactly the key finish_hour and a numeric value.",
+      "expected":{"finish_hour":7}
+    }
+  ]
+}
