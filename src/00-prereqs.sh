@@ -57,6 +57,16 @@ log_info "Detecting GPU tooling..."
 
 GPU_VENDOR="none"
 
+has_intel_drm_device() {
+    local vendor_file
+    for vendor_file in /sys/class/drm/card*/device/vendor; do
+        if [[ "$(cat "$vendor_file" 2>/dev/null)" == "0x8086" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # NVIDIA
 if command -v nvidia-smi >/dev/null 2>&1; then
     GPU_VENDOR="nvidia"
@@ -79,9 +89,9 @@ elif [[ "$(uname -s)" == "Darwin" ]] && sysctl -n machdep.cpu.brand_string 2>/de
     log_ok "Apple Silicon: $chip"
 
 # Intel GPU (experimental)
-elif command -v intel_gpu_top >/dev/null 2>&1 || [[ -d /dev/dri ]] && ls /dev/dri/renderD* >/dev/null 2>&1; then
+elif command -v intel_gpu_top >/dev/null 2>&1 || has_intel_drm_device; then
     GPU_VENDOR="intel"
-    log_warn "Intel GPU: /dev/dri found (experimental support)"
+    log_warn "Intel GPU detected (experimental support)"
     log_warn "  Ollama Intel support requires SYCL/oneAPI. Performance may vary."
 
 # Qualcomm Snapdragon (not supported)

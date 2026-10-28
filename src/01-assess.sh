@@ -21,6 +21,16 @@ log_err()   { printf "${RED}[-]${NC} %s\n" "$*" >&2; }
 die() { log_err "$*"; exit 1; }
 
 # --- Detect GPU ---
+has_intel_drm_device() {
+    local vendor_file
+    for vendor_file in /sys/class/drm/card*/device/vendor; do
+        if [[ "$(cat "$vendor_file" 2>/dev/null)" == "0x8086" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 detect_gpu() {
     # NVIDIA
     if command -v nvidia-smi >/dev/null 2>&1; then
@@ -99,7 +109,7 @@ detect_gpu() {
     fi
 
     # Intel GPU (experimental)
-    if command -v intel_gpu_top >/dev/null 2>&1 || [[ -d /dev/dri ]] && ls /dev/dri/renderD* >/dev/null 2>&1; then
+    if command -v intel_gpu_top >/dev/null 2>&1 || has_intel_drm_device; then
         local name vram
         name="Intel GPU"
         if command -v intel_gpu_top >/dev/null 2>&1; then
