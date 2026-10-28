@@ -42,6 +42,7 @@ prepare_execution_workspace() {
     printf 'FROM user-owned\n' > "${workspace}/ollama-state/user-model:latest"
     write_specs "$workspace" <<'YAML'
 hardware:
+  ram_gb: 32
   gpu_name: Test GPU
   gpu_vendor: nvidia
   gpu_vram_gb: 4
@@ -496,3 +497,6 @@ test_cleanup_rejects_changed_specs
 source "${ROOT_DIR}/tests/prereqs.sh"
 # shellcheck source=production.sh
 source "${ROOT_DIR}/tests/production.sh"
+
+# shellcheck source=targeting.sh
+source "${ROOT_DIR}/tests/targeting.sh"

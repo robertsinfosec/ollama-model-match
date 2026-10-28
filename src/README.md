@@ -328,21 +328,32 @@ bash 02-discover.sh
 ```
 
 Polls Ollama library, HuggingFace orgs (DeepSeek, Qwen, THUDM, MiniMax, Mistral), and recent GGUF uploads.
-Filters out vision/embedding/audio models and anything too large for the VRAM budget.
-**Hardware-aware:** Size tiers scale with VRAM budget:
-- 4GB VRAM → searches 2B-4B models
-- 12GB VRAM → searches 3B-8B models
-- 32GB VRAM → searches 7B-32B models
-- 128GB VRAM → searches 32B-70B+ models
-Always includes small models (1B-3B) for the "fast" role.
+For the official library, reads the exact variants linked on each family main
+page, then reads their registry manifests without downloading weights. This
+uses publisher-listed starting variants rather than an exhaustive scan of all
+precision suffixes. Explicit additional variants can still be supplied through
+the existing candidate registry and research process. No fixed family list
+or parameter-count tiers determine which official variants are considered.
+The weight estimate includes model, projector, adapter and draft layers. Variants
+without usable local weight metadata are skipped. Identical manifest aliases
+are deduplicated; different templates or parameters remain separate candidates.
+HuggingFace discovery retains its existing name-based heuristics.
+
+Discovery and filtering use the assessed capacity minus the existing
+`thresholds.vram_headroom_gb`, plus the existing heuristic allowance for an 8K
+context. GPU runs use `hardware.gpu_vram_gb`; CPU-only runs use
+`hardware.ram_gb`. Missing capacity stops selection instead of guessing. These
+are preliminary screening estimates, including on Apple unified-memory systems;
+backend limits, context usage and runtime allocation still need measurement.
+
 Scores each candidate with `priority` (high/medium/low).
 Deduplicates against `models:`, `rejected:`, and existing `candidates:`.
 
 **Output:** `specs.yaml` updated with new candidates.
 
-**LLM Action:** Review candidate list. Remove any clearly irrelevant entries.
-On large machines (32GB+ VRAM), prefer LARGER models for 'frontier' and 'default' roles.
-Small models (1B-3B) should only be used for the 'fast' role.
+**LLM Action:** Review the fitting variants against the existing target roles and
+research evidence. Retain a practical test set before handing off Phase B;
+memory fit alone does not establish quality, speed or role suitability.
 
 ---
 
@@ -355,13 +366,15 @@ Small models (1B-3B) should only be used for the 'fast' role.
 bash 03-filter.sh
 ```
 
-Checks VRAM budget for each candidate (estimated from tag name).
-Budget = `gpu_vram_gb - vram_headroom_gb` (default 4GB - 1GB = 3GB).
-Only models that fit 100% in GPU pass (no CPU offload).
+Uses `estimated_vram_gb` supplied by discovery or research, with name-based
+estimates only as a fallback for recognized sizes. Applies the same capacity,
+headroom and 8K-context allowance as discovery. CPU-only runs are bounded by
+measured RAM rather than passing arbitrarily large candidates.
+
 These are preliminary estimates, not proof of placement. After warmup, the
 benchmark/evaluation scripts require Ollama to report `100% GPU` for GPU-only
-runs. Explicit CPU-only mode retains its existing behavior. An unrecognized
-parameter count requires artifact-size metadata; `32b` must not match `2b`.
+runs. CPU-only runs do not require GPU placement. An unrecognized parameter
+count requires artifact-size metadata; `32b` must not match `2b`.
 
 **Output:** `results/qualifying.txt`
 

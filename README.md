@@ -92,7 +92,7 @@ placement after warmup, rather than relying solely on memory estimates.
 | Apple Silicon | ✅ Supported | sysctl (unified memory) |
 | Intel (Arc) | ⚠️ Experimental | /dev/dri (requires SYCL) |
 | Qualcomm (Snapdragon) | ❌ Not supported | CPU-only mode |
-| CPU only | ⚠️ Slow | All candidates pass filter |
+| CPU only | ⚠️ Slow | Candidates screened against measured RAM |
 
 ## Supported LLM Ecosystems
 

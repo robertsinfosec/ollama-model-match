@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# 02-filter.sh — Filter candidates by VRAM budget.
+# 03-filter.sh — Filter candidates by assessed GPU memory or CPU-only RAM.
 # Reads: specs.yaml (candidates section)
 # Outputs: results/qualifying.txt
-# Only models that fit 100% in GPU pass (no CPU offload).
+# Screens estimated memory use; GPU placement is checked after warmup.
 #
-# VRAM is ESTIMATED from model tag name (param count).
-# LLM should verify estimates before pulling.
+# Prefers artifact-size estimates, with a tag-name fallback. Runtime fit and
+# performance must still be measured.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/tools.sh
@@ -34,23 +34,16 @@ die() { log_err "$*"; exit 1; }
 [[ -f "$SPEC_FILE" ]] || die "specs.yaml not found."
 
 # --- Hardware specs ---
-gpu_vram=$(yq -r '.hardware.gpu_vram_gb' "$SPEC_FILE")
-gpu_vendor=$(yq -r '.hardware.gpu_vendor // "none"' "$SPEC_FILE")
-vram_headroom=$(yq -r '.thresholds.vram_headroom_gb // 1.0' "$SPEC_FILE")
-
-if [[ "$gpu_vram" == "0" || "$gpu_vendor" == "none" || "$gpu_vendor" == "snapdragon" ]]; then
-    log_warn "No usable GPU detected (CPU-only mode)."
-    log_warn "All candidates will pass filter. Expect very slow inference (1-5 tok/s)."
-    log_info ""
-    vram_budget="999"  # Pass everything
+# shellcheck source=lib/memory-budget.sh
+source "${SCRIPT_DIR}/lib/memory-budget.sh"
+read_memory_budget
+if [[ "$cpu_mode" == true ]]; then
+    log_warn "CPU-only mode: screening against measured RAM; inference may be slow."
     printf 'false\n' > "${RESULTS_DIR}/require-gpu.txt"
 else
-    vram_budget=$(awk -v v="$gpu_vram" -v h="$vram_headroom" 'BEGIN { printf "%.1f", v - h }')
-    log_info "Filtering candidates by VRAM budget"
-    log_info "GPU: ${gpu_vram}GB | Budget: ${vram_budget}GB (${vram_headroom}GB headroom)"
-    log_info ""
     printf 'true\n' > "${RESULTS_DIR}/require-gpu.txt"
 fi
+log_info "Memory budget: ${vram_budget}GiB (${vram_headroom}GiB headroom)"
 
 # --- Estimate VRAM from tag name ---
 estimate_vram() {
@@ -83,10 +76,6 @@ estimate_vram() {
     fi
 }
 
-# --- KV cache estimate (conservative: 0.05 GB per 1K context) ---
-KV_PER_1K="0.05"
-DEFAULT_CONTEXT="8192"
-
 # --- Check candidates exist ---
 : > "$QUALIFYING"
 candidate_count=$(yq -r '.candidates | length' "$SPEC_FILE" 2>/dev/null || echo "0")
@@ -107,15 +96,19 @@ while (( i < candidate_count )); do
     configured_vram=$(yq -r ".candidates[$i].estimated_vram_gb // \"null\"" "$SPEC_FILE")
     retest=$(yq -r ".candidates[$i].retest // false" "$SPEC_FILE")
 
+    # Evaluate history inside yq: grep -q can close a large output pipe early,
+    # causing a false non-match under pipefail. Explicit retests bypass history.
     # Skip if already in models (curated)
-    if [[ "$retest" != true ]] && yq -r '.models[].tag' "$SPEC_FILE" 2>/dev/null | grep -qxF "$tag"; then
+    if [[ "$retest" != true ]] && MM_TAG="$tag" yq -e \
+        '[.models[].tag | select(. == strenv(MM_TAG))] | length > 0' "$SPEC_FILE" >/dev/null 2>&1; then
         log_info "SKIP (already curated): $tag"
         (( i++ )) || true
         continue
     fi
 
     # Skip if already in rejected
-    if [[ "$retest" != true ]] && yq -r '.rejected[].tag' "$SPEC_FILE" 2>/dev/null | grep -qxF "$tag"; then
+    if [[ "$retest" != true ]] && MM_TAG="$tag" yq -e \
+        '[.rejected[].tag | select(. == strenv(MM_TAG))] | length > 0' "$SPEC_FILE" >/dev/null 2>&1; then
         log_info "SKIP (already rejected): $tag"
         (( i++ )) || true
         continue
@@ -134,16 +127,15 @@ while (( i < candidate_count )); do
         (( i++ )) || true
         continue
     fi
-    kv_cache=$(awk -v k="$KV_PER_1K" -v c="$DEFAULT_CONTEXT" 'BEGIN { printf "%.2f", (c/1000)*k }')
-    total=$(awk -v v="$vram_est" -v k="$kv_cache" 'BEGIN { printf "%.2f", v+k }')
+    total=$(estimated_runtime_memory "$vram_est")
 
     # Check if fits
     if awk -v t="$total" -v b="$vram_budget" 'BEGIN { exit !(t <= b) }'; then
         printf '%s|%s|%s|%s|%s\n' "$tag" "$priority" "$source" "$total" "$vram_est" >> "$QUALIFYING"
-        log_ok "QUALIFY: $tag (est. ${total}GB, priority: $priority)"
+        log_ok "QUALIFY: $tag (est. ${total}GiB, priority: $priority)"
         (( qualifying_count++ )) || true
     else
-        log_warn "EXCLUDE: $tag (est. ${total}GB > ${vram_budget}GB budget)"
+        log_warn "EXCLUDE: $tag (est. ${total}GiB > ${vram_budget}GiB budget)"
         (( excluded_count++ )) || true
     fi
 
@@ -156,10 +148,5 @@ log_info "Qualifying: $qualifying_count"
 log_info "Excluded:   $excluded_count"
 log_info "Output:     $QUALIFYING"
 log_info ""
-log_warn "NOTE: VRAM estimates are heuristic (from tag name)."
-log_warn "LLM should verify estimates against model metadata before pulling."
-log_info ""
-log_info "HARDWARE-AWARE NOTE:"
-log_info "On large machines (32GB+ VRAM), many models will qualify."
-log_info "The LLM should prefer LARGER models for 'frontier' and 'default' roles."
-log_info "Small models (1B-3B) should only be used for the 'fast' role."
+log_warn "Memory estimates include weights and a heuristic 8K-context KV allowance."
+log_warn "Qualifying models still require measured inference and GPU-placement checks."

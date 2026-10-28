@@ -191,13 +191,15 @@ test_discovery_writes_candidates_with_go_yq() {
     cat > "${workspace}/bin/curl" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
+    *registry.ollama.ai*) printf '{"layers":[{"mediaType":"application/vnd.ollama.image.model","size":1073741824,"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}' ;;
+    *ollama.com/library/tiny-1b) printf '<a href="/library/tiny-1b:latest">test</a>\n' ;;
     *ollama.com/library*) printf '<a href="/library/tiny-1b">test</a>\n' ;;
     *) printf '[]\n' ;;
 esac
 SH
     chmod +x "${workspace}/bin/curl"
     PATH="${workspace}/bin:${PATH}" bash "${workspace}/src/02-discover.sh" >/dev/null
-    yq -e '[.candidates[] | select(.tag == "tiny-1b" and .source == "ollama")] | length == 1' "${workspace}/src/specs.yaml" >/dev/null || fail "Go yq candidate append failed"
+    yq -e '[.candidates[] | select(.tag == "tiny-1b:latest" and .source == "ollama")] | length == 1' "${workspace}/src/specs.yaml" >/dev/null || fail "Go yq candidate append failed"
     pass "discovery appends candidates using Mike Farah yq"
 }
 

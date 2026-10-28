@@ -6,9 +6,8 @@ set -Eeuo pipefail
 # Updates: specs.yaml (candidates section with priority)
 # Outputs: summary to stdout
 #
-# Discovery is hardware-aware: searches for models that fit the VRAM budget.
-# On 4GB: searches 2B-4B models. On 128GB: searches 32B-70B+ models.
-# Always includes small models (1B-3B) for the "fast" role.
+# Official-library variants are screened using their artifact sizes and the
+# assessed hardware. Runtime fit is still verified later by loading the model.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/tools.sh
@@ -31,13 +30,12 @@ die() { log_err "$*"; exit 1; }
 [[ -f "$SPEC_FILE" ]] || die "specs.yaml not found. Run 01-assess.sh first."
 
 # --- Read hardware specs ---
-gpu_vram=$(yq -r '.hardware.gpu_vram_gb' "$SPEC_FILE")
-vram_headroom=$(yq -r '.thresholds.vram_headroom_gb // 1.0' "$SPEC_FILE")
-vram_budget=$(awk -v v="$gpu_vram" -v h="$vram_headroom" 'BEGIN { printf "%.0f", v - h }')
+# shellcheck source=lib/memory-budget.sh
+source "${SCRIPT_DIR}/lib/memory-budget.sh"
+read_memory_budget
 
-# --- Calculate size tiers based on VRAM budget ---
-# Always include small models (1B-3B) for "fast" role.
-# Include larger models based on available VRAM.
+# --- Legacy HuggingFace name heuristics ---
+modality_pattern="vision|embed|all-minilm|nomic|bge-|e5-|rerank|clip|whisper|tts|stt|audio|image|minicpm-v|llava|moondream"
 build_size_pattern() {
     local budget="$1"
     local pattern="1b|2b|3b|1\.5b|mini|tiny|lite"
@@ -65,7 +63,7 @@ build_size_pattern() {
 
 build_exclude_pattern() {
     local budget="$1"
-    local exclude="vision|embed|all-minilm|nomic|bge-|e5-|rerank|clip|whisper|tts|stt|audio|image|minicpm-v|llava|moondream"
+    local exclude="$modality_pattern"
 
     # Exclude models that are clearly too big for the budget
     if (( budget < 4 )); then
@@ -84,24 +82,28 @@ build_exclude_pattern() {
     echo "$exclude"
 }
 
-SIZE_PATTERN=$(build_size_pattern "$vram_budget")
-EXCLUDE_PATTERN=$(build_exclude_pattern "$vram_budget")
+tier_budget=$(awk -v b="$vram_budget" 'BEGIN {printf "%d", b}')
+SIZE_PATTERN=$(build_size_pattern "$tier_budget")
+EXCLUDE_PATTERN=$(build_exclude_pattern "$tier_budget")
 
-log_info "Polling sources for models fitting ${vram_budget}GB VRAM budget"
-log_info "Reserved headroom: ${vram_headroom}GB"
-log_info "Size tiers: $SIZE_PATTERN"
+log_info "Polling sources for models fitting ${vram_budget}GiB memory budget (CPU mode: $cpu_mode)"
+log_info "Reserved headroom: ${vram_headroom}GiB"
+log_info "Legacy HuggingFace size heuristic: $SIZE_PATTERN"
 log_info ""
 
 # --- Read known tags ---
-known_tags() {
-    yq -r '.models[].tag | select(. != null)' "$SPEC_FILE"
-    yq -r '.rejected[].tag | select(. != null)' "$SPEC_FILE"
-    yq -r '.candidates[].tag | select(. != null)' "$SPEC_FILE"
-}
-
 is_known() {
-    local tag="$1"
-    known_tags | grep -qxF "$tag"
+    local tag="$1" source="$2"
+    if [[ "$source" == ollama ]]; then
+        [[ "$tag" == *:* ]] || tag="${tag}:latest"
+        # A single reader avoids SIGPIPE from grep -q on large registries.
+        awk -v tag="$tag" '
+            {if ($0 !~ /:/) $0=$0 ":latest"; if ($0 == tag) found=1}
+            END {exit !found}
+        ' "$knownfile"
+    else
+        grep -qxF "$tag" "$knownfile"
+    fi
 }
 
 # --- Priority scoring ---
@@ -137,20 +139,40 @@ score_priority() {
     echo "medium"
 }
 
-tmpfile=$(mktemp)
-trap 'rm -f "$tmpfile"' EXIT
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+tmpfile="${tmpdir}/candidates"
+: > "$tmpfile"
+mkdir "${tmpdir}/metadata"
+knownfile="${tmpdir}/known-tags"
+yq -r '(.models // []) + (.rejected // []) + (.candidates // []) | .[].tag | select(. != null)' "$SPEC_FILE" > "$knownfile"
 
 today=$(date +%Y-%m-%d)
 
 # --- Source 1: Ollama library ---
 log_info "Polling Ollama library..."
 if library_html=$(curl -fsSL https://ollama.com/library 2>/dev/null); then
-    while read -r name; do
-        [[ -n "$name" ]] || continue
-        echo "$name" | grep -qiE "$EXCLUDE_PATTERN" && continue
-        echo "$name" | grep -qiE "$SIZE_PATTERN" || continue
-        echo "ollama||$name" >> "$tmpfile"
-    done < <(printf '%s\n' "$library_html" | grep -oP 'href="/library/\K[^"]+' | sort -u || true)
+    # Do not filter family names by parameter counts: families such as qwen3
+    # contain many sizes, and even the same size has different quantizations.
+    while read -r family; do
+        [[ "$family" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || continue
+        echo "$family" | grep -qiE "$modality_pattern" && continue
+        printf '%s\n' "$family"
+    done < <(printf '%s\n' "$library_html" | grep -oP 'href="/library/\K[^"/?#:]+' | sort -u || true) > "${tmpdir}/families"
+    if [[ -s "${tmpdir}/families" ]]; then
+        # Separate worker files prevent interleaved output; omit GNU-only -r
+        # so this also works with the xargs shipped on macOS.
+        # shellcheck disable=SC2016 # Expanded by the child shell.
+        xargs -n 1 -P 4 bash -c 'bash "$1/lib/model-metadata.sh" "$3" > "$2/$3"' \
+            _ "$SCRIPT_DIR" "${tmpdir}/metadata" < "${tmpdir}/families"
+    fi
+    while IFS='|' read -r tag weights; do
+        # Use the same headroom and KV estimate as 03-filter.sh. Estimates are
+        # provisional: actual context, backend and GPU placement matter too.
+        if awk -v total="$(estimated_runtime_memory "$weights")" -v b="$vram_budget" 'BEGIN {exit !(total <= b)}'; then
+            printf 'ollama||%s|%s\n' "$tag" "$weights" >> "$tmpfile"
+        fi
+    done < <(find "${tmpdir}/metadata" -type f -exec cat {} +)
 else
     log_warn "Could not retrieve the Ollama library; continuing with other sources."
 fi
@@ -162,7 +184,7 @@ for org in $ORGS; do
     if models_json=$(curl -fsSL "https://huggingface.co/api/models?author=${org}&search=gguf&limit=15" 2>/dev/null); then
         while read -r model; do
             [[ -n "$model" ]] || continue
-            name=$(echo "$model" | sed 's|.*/||')
+            name="${model##*/}"
             echo "$name" | grep -qiE "$EXCLUDE_PATTERN" && continue
             echo "$name" | grep -qiE "$SIZE_PATTERN" || continue
             echo "hf|$org|$model" >> "$tmpfile"
@@ -177,7 +199,7 @@ log_info "Polling HuggingFace recent GGUFs..."
 if recent_json=$(curl -fsSL "https://huggingface.co/api/models?search=gguf&sort=createdAt&limit=30" 2>/dev/null); then
     while read -r model; do
         [[ -n "$model" ]] || continue
-        name=$(echo "$model" | sed 's|.*/||')
+        name="${model##*/}"
         echo "$name" | grep -qiE "$EXCLUDE_PATTERN" && continue
         echo "$name" | grep -qiE "$SIZE_PATTERN" || continue
         echo "hf-trending||$model" >> "$tmpfile"
@@ -189,7 +211,7 @@ fi
 # --- Filter known and deduplicate ---
 log_info "Filtering known models and scoring priority..."
 
-sort -u "$tmpfile" | while IFS='|' read -r source org name; do
+sort -u "$tmpfile" | while IFS='|' read -r source org name weights; do
     if [[ "$source" == "ollama" ]]; then
         tag="$name"
         org="ollama"
@@ -200,15 +222,22 @@ sort -u "$tmpfile" | while IFS='|' read -r source org name; do
         org="hf-trending"
     fi
 
-    if is_known "$tag"; then
+    if is_known "$tag" "$source"; then
         continue
     fi
 
     priority=$(score_priority "$source" "$org" "$name")
 
-    MM_TAG="$tag" MM_SOURCE="$source" MM_ORG="$org" MM_PRIORITY="$priority" MM_DATE="$today" \
-    yq -i '.candidates += [{"tag": strenv(MM_TAG), "source": strenv(MM_SOURCE), "org": strenv(MM_ORG), "priority": strenv(MM_PRIORITY), "discovered": strenv(MM_DATE), "status": "new"}]' "$SPEC_FILE"
+    # Publish the tag and its estimate together so an interruption cannot
+    # leave a known candidate whose missing estimate is never refreshed.
+    append_candidate='.candidates += [{"tag": strenv(MM_TAG), "source": strenv(MM_SOURCE), "org": strenv(MM_ORG), "priority": strenv(MM_PRIORITY), "discovered": strenv(MM_DATE), "status": "new"}]'
+    if [[ -n "${weights:-}" ]]; then
+        append_candidate+=' | .candidates[-1].estimated_vram_gb = env(MM_WEIGHTS)'
+    fi
+    MM_TAG="$tag" MM_SOURCE="$source" MM_ORG="$org" MM_PRIORITY="$priority" \
+    MM_DATE="$today" MM_WEIGHTS="${weights:-}" yq -i "$append_candidate" "$SPEC_FILE"
 
+    printf '%s\n' "$tag" >> "$knownfile"
     case "$priority" in
         high)   log_ok "NEW [high]: $tag (from $source)" ;;
         medium) log_info "NEW [medium]: $tag (from $source)" ;;
@@ -223,4 +252,4 @@ high=$(yq -r '[.candidates[] | select(.priority == "high")] | length' "$SPEC_FIL
 medium=$(yq -r '[.candidates[] | select(.priority == "medium")] | length' "$SPEC_FILE")
 low=$(yq -r '[.candidates[] | select(.priority == "low")] | length' "$SPEC_FILE")
 log_info "Discovery complete. Total candidates: $total (high: $high, medium: $medium, low: $low)"
-log_info "VRAM budget: ${vram_budget}GB | Size tiers: $SIZE_PATTERN"
+log_info "Memory budget: ${vram_budget}GiB | HuggingFace size heuristic: $SIZE_PATTERN"
