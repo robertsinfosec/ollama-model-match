@@ -9,6 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/tools.sh
 source "${SCRIPT_DIR}/lib/tools.sh"
 require_yq
+# shellcheck source=lib/vulkan.sh
+source "${SCRIPT_DIR}/lib/vulkan.sh"
 SPEC_FILE="${SCRIPT_DIR}/specs.yaml"
 
 # --- Colors ---
@@ -23,6 +25,17 @@ log_ok()    { printf "${GREEN}[+]${NC} %s\n" "$*"; }
 log_warn()  { printf "${YELLOW}[!]${NC} %s\n" "$*" >&2; }
 log_err()   { printf "${RED}[-]${NC} %s\n" "$*" >&2; }
 die() { log_err "$*"; exit 1; }
+
+# Assessment measures this host. Require a recognized local endpoint before
+# replacing hardware that may describe a different inference machine.
+assessment_host="${OLLAMA_HOST:-127.0.0.1:11434}"
+assessment_host="${assessment_host#http://}"
+assessment_host="${assessment_host#https://}"
+assessment_host="${assessment_host%%/*}"
+case "$assessment_host" in
+    localhost|localhost:*|127.0.0.1|127.0.0.1:*|0.0.0.0|0.0.0.0:*|'[::1]'|'[::1]':*) ;;
+    *) die "Run hardware assessment on the inference machine using a supported local endpoint. This OLLAMA_HOST is not a recognized local address." ;;
+esac
 
 # --- Detect GPU ---
 detect_gpu() {
@@ -99,6 +112,16 @@ detect_gpu() {
             fi
         fi
         echo "amd|$name|$vram_gb"
+        return
+    fi
+
+    # A single discrete Vulkan device can report real memory even when vendor
+    # tools are absent (e.g. Nouveau). Do not guess which of several GPUs runs
+    # Ollama, and do not count integrated/shared RAM as dedicated VRAM.
+    local vulkan_gpu
+    if [[ "$(uname -s)" == Linux ]] && vulkan_gpu=$(detect_vulkan_gpu); then
+        log_warn "Using Vulkan hardware capacity; Ollama GPU placement must still be verified."
+        printf '%s\n' "$vulkan_gpu"
         return
     fi
 

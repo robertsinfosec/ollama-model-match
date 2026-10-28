@@ -496,3 +496,6 @@ test_cleanup_rejects_changed_specs
 source "${ROOT_DIR}/tests/prereqs.sh"
 # shellcheck source=production.sh
 source "${ROOT_DIR}/tests/production.sh"
+
+# shellcheck source=hardware.sh
+source "${ROOT_DIR}/tests/hardware.sh"

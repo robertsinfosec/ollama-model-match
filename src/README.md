@@ -246,7 +246,13 @@ of promising an untested native configuration.
 bash 01-assess.sh
 ```
 
-Detects GPU (nvidia-smi/amd-smi/Apple Silicon), RAM, CPU, OS.
+Detects GPU, RAM, CPU and OS on the inference machine. Run assessment on that
+machine; an explicitly remote `OLLAMA_HOST` is rejected before updating hardware.
+On Linux, optional `vulkaninfo` provides a fallback for a single discrete GPU
+when vendor tools are unavailable. This reads dedicated memory heaps, excluding
+shared system memory and software renderers. Multiple discrete Vulkan GPUs are
+not automatically combined or assigned to Ollama. Hardware visibility still
+requires an actual Ollama load to confirm backend support.
 Creates `specs.yaml` if it doesn't exist, or updates the hardware section if it does.
 
 **Output:** `specs.yaml` with detected hardware specs.
