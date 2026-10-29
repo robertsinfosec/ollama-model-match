@@ -492,10 +492,10 @@ test_cleanup_removes_new_interim_models_only
 test_alias_failure_blocks_cleanup
 test_cleanup_rejects_changed_specs
 
+# shellcheck source=hardware.sh
+source "${ROOT_DIR}/tests/hardware.sh"
+
 # shellcheck source=prereqs.sh
 source "${ROOT_DIR}/tests/prereqs.sh"
 # shellcheck source=production.sh
 source "${ROOT_DIR}/tests/production.sh"
-
-# shellcheck source=hardware.sh
-source "${ROOT_DIR}/tests/hardware.sh"
